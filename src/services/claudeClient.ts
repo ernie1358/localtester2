@@ -4,7 +4,8 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { invoke } from '@tauri-apps/api/core';
-import type { CaptureResult } from '../types';
+import type { CaptureResult, ClaudeModelConfig } from '../types';
+import { DEFAULT_CLAUDE_MODEL_CONFIG } from '../types';
 
 /** Singleton Claude client instance */
 let anthropicClient: Anthropic | null = null;
@@ -30,16 +31,37 @@ export async function getClaudeClient(): Promise<Anthropic> {
 }
 
 /**
- * Build the computer tool definition for Claude API
- * Using computer_20250124 type for compatibility with current SDK
+ * Computer tool type for Claude API
+ * Note: Using type assertion as SDK may not have latest type definitions (computer_20251124)
+ * When SDK is updated to support computer_20251124, this can be removed
  */
-export function buildComputerTool(captureResult: CaptureResult) {
+export interface ComputerTool {
+  type: 'computer_20251124' | 'computer_20250124';
+  name: 'computer';
+  display_width_px: number;
+  display_height_px: number;
+  display_number: number;
+  enable_zoom?: boolean;
+}
+
+/**
+ * Build the computer tool definition for Claude API
+ * Supports both Opus 4.5 (computer_20251124) and Sonnet (computer_20250124) tool versions
+ *
+ * @param captureResult Screen capture result with dimensions
+ * @param modelConfig Claude model configuration (optional, defaults to Opus 4.5)
+ */
+export function buildComputerTool(
+  captureResult: CaptureResult,
+  modelConfig: ClaudeModelConfig = DEFAULT_CLAUDE_MODEL_CONFIG
+): ComputerTool {
   return {
-    type: 'computer_20250124' as const,
-    name: 'computer' as const,
+    type: modelConfig.toolType,
+    name: 'computer',
     display_width_px: captureResult.resizedWidth,
     display_height_px: captureResult.resizedHeight,
     display_number: 1,
+    ...(modelConfig.enableZoom && { enable_zoom: true }),
   };
 }
 

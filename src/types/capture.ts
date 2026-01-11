@@ -22,6 +22,8 @@ export interface CaptureResult {
   scaleFactor: number;
   imageBase64: string;
   monitorId: number;
+  /** Display scale factor for HiDPI/Retina displays (e.g., 2.0 for Retina) */
+  displayScaleFactor: number;
 }
 
 /** Permission status (macOS) */

@@ -19,8 +19,9 @@ import type {
   ComputerAction,
   ActionRecord,
   AgentLoopConfig,
+  ClaudeModelConfig,
 } from '../types';
-import { DEFAULT_AGENT_LOOP_CONFIG } from '../types';
+import { DEFAULT_AGENT_LOOP_CONFIG, DEFAULT_CLAUDE_MODEL_CONFIG } from '../types';
 
 /** Options for agent loop */
 export interface AgentLoopOptions {
@@ -39,14 +40,43 @@ export interface AgentLoopResult {
 }
 
 /**
+ * Merge partial model config with defaults (deep merge)
+ * Also enforces enableZoom constraint - only supported for Opus 4.5 (computer_20251124)
+ */
+function mergeModelConfig(
+  partial?: Partial<ClaudeModelConfig>
+): ClaudeModelConfig {
+  if (!partial) {
+    return DEFAULT_CLAUDE_MODEL_CONFIG;
+  }
+  return {
+    model: partial.model ?? DEFAULT_CLAUDE_MODEL_CONFIG.model,
+    betaHeader: partial.betaHeader ?? DEFAULT_CLAUDE_MODEL_CONFIG.betaHeader,
+    toolType: partial.toolType ?? DEFAULT_CLAUDE_MODEL_CONFIG.toolType,
+    // enableZoom is only supported for Opus 4.5 (computer_20251124)
+    // Ignore enableZoom for older tool versions
+    enableZoom:
+      (partial.toolType ?? DEFAULT_CLAUDE_MODEL_CONFIG.toolType) === 'computer_20251124'
+        ? (partial.enableZoom ?? DEFAULT_CLAUDE_MODEL_CONFIG.enableZoom)
+        : false,
+  };
+}
+
+/**
  * Execute the agent loop for a single scenario
  */
 export async function runAgentLoop(
   options: AgentLoopOptions
 ): Promise<AgentLoopResult> {
-  const config: AgentLoopConfig = {
+  // Deep merge config with defaults, including modelConfig
+  const baseConfig: AgentLoopConfig = {
     ...DEFAULT_AGENT_LOOP_CONFIG,
     ...options.config,
+  };
+  // Ensure modelConfig is properly merged
+  const config: AgentLoopConfig = {
+    ...baseConfig,
+    modelConfig: mergeModelConfig(options.config?.modelConfig),
   };
 
   const log = options.onLog ?? console.log;
@@ -58,6 +88,7 @@ export async function runAgentLoop(
   try {
     // Initial screenshot
     log('[Agent Loop] Capturing initial screenshot...');
+    log(`[Agent Loop] Scenario description: ${options.scenario.description}`);
     captureResult = await invoke<CaptureResult>('capture_screen');
 
     // Initial message with scenario description and screenshot
@@ -93,8 +124,9 @@ export async function runAgentLoop(
       options.onIteration?.(iteration + 1);
       log(`[Agent Loop] Iteration ${iteration + 1}/${config.maxIterationsPerScenario}`);
 
-      // Call Claude API
-      const response = await callClaudeAPI(messages, captureResult, options.abortSignal);
+      // Call Claude API with model configuration
+      const modelConfig = config.modelConfig ?? DEFAULT_CLAUDE_MODEL_CONFIG;
+      const response = await callClaudeAPI(messages, captureResult, options.abortSignal, modelConfig);
 
       // Handle null response (aborted)
       if (!response) {
@@ -143,9 +175,10 @@ export async function runAgentLoop(
           };
         }
 
-        // Execute action
-        log(`[Agent Loop] Executing action: ${action.action}`);
-        const actionResult = await executeAction(action, captureResult.scaleFactor);
+        // Execute action with detailed logging
+        const actionDetails = formatActionDetails(action, captureResult.scaleFactor, captureResult.displayScaleFactor);
+        log(`[Agent Loop] Executing: ${actionDetails}`);
+        const actionResult = await executeAction(action, captureResult.scaleFactor, captureResult.displayScaleFactor);
 
         // Add to action history
         actionHistory.push(createActionRecord(toolUse.id, action));
@@ -205,6 +238,58 @@ export async function runAgentLoop(
 }
 
 /**
+ * Format action details for logging
+ * Shows coordinates (both Claude and screen), text, and other parameters
+ */
+function formatActionDetails(
+  action: ComputerAction,
+  scaleFactor: number,
+  displayScaleFactor: number
+): string {
+  const parts: string[] = [action.action];
+
+  // Add coordinate info with conversion (includes HiDPI/Retina adjustment)
+  if (action.coordinate) {
+    const [claudeX, claudeY] = action.coordinate;
+    const screenCoord = toScreenCoordinate({ x: claudeX, y: claudeY }, scaleFactor, displayScaleFactor);
+    parts.push(`at Claude(${claudeX}, ${claudeY}) → Screen(${screenCoord.x}, ${screenCoord.y}) [DPI:${displayScaleFactor}]`);
+  }
+
+  // Add start coordinate for drag actions
+  if (action.start_coordinate) {
+    const [startX, startY] = action.start_coordinate;
+    const screenStart = toScreenCoordinate({ x: startX, y: startY }, scaleFactor, displayScaleFactor);
+    parts.push(`from Claude(${startX}, ${startY}) → Screen(${screenStart.x}, ${screenStart.y})`);
+  }
+
+  // Add text for type/key actions
+  if (action.text) {
+    const displayText = action.text.length > 50 ? action.text.substring(0, 50) + '...' : action.text;
+    parts.push(`text="${displayText}"`);
+  }
+
+  // Add scroll info
+  if (action.scroll_direction) {
+    parts.push(`direction=${action.scroll_direction}`);
+    if (action.scroll_amount) {
+      parts.push(`amount=${action.scroll_amount}`);
+    }
+  }
+
+  // Add duration for wait
+  if (action.duration !== undefined) {
+    parts.push(`duration=${action.duration}ms`);
+  }
+
+  // Add key info for hold_key
+  if (action.key) {
+    parts.push(`key="${action.key}" ${action.down ? 'down' : 'up'}`);
+  }
+
+  return parts.join(' ');
+}
+
+/**
  * Check if scenario is complete (no tool_use blocks)
  */
 function isScenarioComplete(response: BetaMessage): boolean {
@@ -213,11 +298,13 @@ function isScenarioComplete(response: BetaMessage): boolean {
 
 /**
  * Call Claude API with abort support
+ * Uses model configuration to support different Claude models (Opus 4.5, Sonnet, etc.)
  */
 async function callClaudeAPI(
   messages: BetaMessageParam[],
   captureResult: CaptureResult,
-  abortSignal: AbortSignal
+  abortSignal: AbortSignal,
+  modelConfig: ClaudeModelConfig
 ): Promise<BetaMessage | null> {
   // Define abort handler for cleanup
   let abortHandler: (() => void) | null = null;
@@ -225,12 +312,15 @@ async function callClaudeAPI(
   try {
     const client = await getClaudeClient();
 
+    // Build computer tool with model configuration
+    // Note: Using type assertion as SDK may not have latest type definitions (computer_20251124)
+    // This is intentional and should be updated when SDK supports the new tool version
     const apiPromise = client.beta.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: modelConfig.model,
       max_tokens: 4096,
-      tools: [buildComputerTool(captureResult)],
+      tools: [buildComputerTool(captureResult, modelConfig)] as unknown as Parameters<typeof client.beta.messages.create>[0]['tools'],
       messages,
-      betas: ['computer-use-2025-01-24'],
+      betas: [modelConfig.betaHeader],
     });
 
     // Create abort promise with proper cleanup
@@ -267,20 +357,23 @@ interface ActionExecutionResult {
 
 /**
  * Execute a computer action via Rust backend
+ * Coordinates are converted from Claude (resized image) to logical screen points (for HiDPI/Retina)
  */
 async function executeAction(
   action: ComputerAction,
-  scaleFactor: number
+  scaleFactor: number,
+  displayScaleFactor: number
 ): Promise<ActionExecutionResult> {
   try {
     const { x, y } = action.coordinate
-      ? toScreenCoordinate({ x: action.coordinate[0], y: action.coordinate[1] }, scaleFactor)
+      ? toScreenCoordinate({ x: action.coordinate[0], y: action.coordinate[1] }, scaleFactor, displayScaleFactor)
       : { x: 0, y: 0 };
 
     const { x: startX, y: startY } = action.start_coordinate
       ? toScreenCoordinate(
           { x: action.start_coordinate[0], y: action.start_coordinate[1] },
-          scaleFactor
+          scaleFactor,
+          displayScaleFactor
         )
       : { x: 0, y: 0 };
 

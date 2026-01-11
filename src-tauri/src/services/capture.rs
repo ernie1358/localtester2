@@ -7,6 +7,42 @@ use xcap::Monitor;
 use crate::error::XenotesterError;
 use crate::services::image_processor::{resize_screenshot, ResizeResult};
 
+#[cfg(target_os = "macos")]
+use core_graphics::display::CGDisplay;
+
+/// Get the display scale factor for HiDPI/Retina displays on macOS
+/// Returns 2.0 for Retina displays, 1.0 for standard displays
+///
+/// Note: Currently uses the main display's scale factor. For multi-monitor setups
+/// with different scale factors, this may not be accurate for secondary monitors.
+/// TODO: Consider passing monitor ID and querying per-monitor scale factor
+#[cfg(target_os = "macos")]
+fn get_display_scale_factor() -> f64 {
+    // Get the main display's scale factor using Core Graphics
+    let main_display = CGDisplay::main();
+    let mode = main_display.display_mode();
+
+    if let Some(mode) = mode {
+        let pixel_width = mode.pixel_width() as f64;
+        let logical_width = mode.width() as f64;
+        if logical_width > 0.0 {
+            return pixel_width / logical_width;
+        }
+    }
+
+    // Fallback: assume standard display (1.0) if we can't determine
+    // This is safer than assuming Retina (2.0) as it won't scale clicks incorrectly
+    1.0
+}
+
+/// Get the display scale factor (non-macOS fallback)
+#[cfg(not(target_os = "macos"))]
+fn get_display_scale_factor() -> f64 {
+    // On other platforms, assume 1.0 (no HiDPI)
+    // This can be extended for Windows/Linux HiDPI support
+    1.0
+}
+
 /// Monitor information for frontend display
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +67,9 @@ pub struct CaptureResult {
     pub scale_factor: f64,
     pub image_base64: String,
     pub monitor_id: u32,
+    /// Display scale factor for HiDPI/Retina displays (e.g., 2.0 for Retina)
+    /// This is the ratio of physical pixels to logical points
+    pub display_scale_factor: f64,
 }
 
 /// Get list of all available monitors
@@ -88,6 +127,9 @@ pub fn capture_monitor(monitor_id: u32) -> Result<CaptureResult, XenotesterError
 
 /// Internal capture implementation
 fn capture_monitor_internal(monitor_id: u32, monitor: Monitor) -> Result<CaptureResult, XenotesterError> {
+    // Get the display scale factor before capture
+    let display_scale_factor = get_display_scale_factor();
+
     // Capture the screen
     let image = monitor
         .capture_image()
@@ -107,5 +149,6 @@ fn capture_monitor_internal(monitor_id: u32, monitor: Monitor) -> Result<Capture
         scale_factor: resize_result.scale_factor,
         image_base64: resize_result.image_base64,
         monitor_id,
+        display_scale_factor,
     })
 }

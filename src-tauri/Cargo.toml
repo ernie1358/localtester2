@@ -45,6 +45,10 @@ dotenv = "0.15"
 
 # macOS permissions are handled directly via xcap and enigo capability checks
 
+# macOS HiDPI/Retina display scale factor
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.24"
+
 [features]
 default = []
 # template-matching = ["opencv"]

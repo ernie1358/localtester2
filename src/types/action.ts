@@ -44,11 +44,41 @@ export interface ActionRecord {
   timestamp: number;
 }
 
+/** Claude API model configuration */
+export interface ClaudeModelConfig {
+  /** Model ID to use for Computer Use API */
+  model: string;
+  /** Beta header for Computer Use API */
+  betaHeader: string;
+  /** Computer tool type version */
+  toolType: 'computer_20251124' | 'computer_20250124';
+  /** Enable zoom action (Opus 4.5 only) */
+  enableZoom: boolean;
+}
+
+/** Default Claude model configuration for Opus 4.5 */
+export const DEFAULT_CLAUDE_MODEL_CONFIG: ClaudeModelConfig = {
+  model: 'claude-opus-4-5-20251101',
+  betaHeader: 'computer-use-2025-11-24',
+  toolType: 'computer_20251124',
+  enableZoom: false,
+};
+
+/** Fallback Claude model configuration (Sonnet) */
+export const FALLBACK_CLAUDE_MODEL_CONFIG: ClaudeModelConfig = {
+  model: 'claude-sonnet-4-20250514',
+  betaHeader: 'computer-use-2025-01-24',
+  toolType: 'computer_20250124',
+  enableZoom: false,
+};
+
 /** Configuration for agent loop */
 export interface AgentLoopConfig {
   maxIterationsPerScenario: number;
   loopDetectionWindow: number;
   loopDetectionThreshold: number;
+  /** Claude model configuration */
+  modelConfig?: ClaudeModelConfig;
 }
 
 /** Default agent loop configuration */
@@ -56,4 +86,5 @@ export const DEFAULT_AGENT_LOOP_CONFIG: AgentLoopConfig = {
   maxIterationsPerScenario: 30,
   loopDetectionWindow: 5,
   loopDetectionThreshold: 3,
+  modelConfig: DEFAULT_CLAUDE_MODEL_CONFIG,
 };

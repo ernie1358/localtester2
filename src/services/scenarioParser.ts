@@ -4,6 +4,7 @@
 
 import { getClaudeClient } from './claudeClient';
 import type { Scenario, ScenarioSplitResult } from '../types';
+import { DEFAULT_CLAUDE_MODEL_CONFIG } from '../types';
 
 /** System prompt for scenario splitting */
 const SCENARIO_SPLIT_PROMPT = `
@@ -40,7 +41,7 @@ export async function parseScenarios(userInput: string): Promise<Scenario[]> {
     const client = await getClaudeClient();
 
     const response = await client.messages.create({
-      model: 'claude-opus-4-5-20251101',
+      model: DEFAULT_CLAUDE_MODEL_CONFIG.model,
       max_tokens: 1024,
       system: SCENARIO_SPLIT_PROMPT,
       messages: [{ role: 'user', content: userInput }],
