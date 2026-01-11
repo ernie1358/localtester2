@@ -5,7 +5,14 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { runAgentLoop, type AgentLoopResult } from './agentLoop';
-import type { Scenario, ScenarioRunnerState, AgentLoopConfig } from '../types';
+import type {
+  Scenario,
+  ScenarioRunnerState,
+  AgentLoopConfig,
+  StoredScenario,
+  BatchExecutionResult,
+  ScenarioExecutionResult,
+} from '../types';
 import { mapTestResultStatusToScenarioStatus } from '../types';
 
 /** Options for scenario runner */
@@ -218,7 +225,133 @@ export class ScenarioRunner {
       console.log(message);
     }
   }
+
+  /**
+   * Run selected scenarios from StoredScenario list in order
+   * Uses existing emergency-stop listener
+   * @param orderedScenarioIds - Scenario IDs in execution order
+   * @param scenarios - All scenario data
+   */
+  public async runSelected(
+    orderedScenarioIds: string[],
+    scenarios: StoredScenario[],
+    options: ScenarioRunnerOptions = {}
+  ): Promise<BatchExecutionResult> {
+    const results: ScenarioExecutionResult[] = [];
+    let successCount = 0;
+    let failureCount = 0;
+
+    // Initialize state using existing state management
+    this.state = {
+      scenarios: [],
+      currentIndex: 0,
+      isRunning: true,
+      stopOnFailure: options.stopOnFailure ?? false,
+    };
+
+    this.onStateChange = options.onStateChange;
+    this.onLog = options.onLog;
+    this.abortController = new AbortController();
+
+    // Clear any previous stop request
+    await invoke('clear_stop');
+
+    // Execute in orderedScenarioIds order (order guarantee)
+    for (let i = 0; i < orderedScenarioIds.length; i++) {
+      const scenarioId = orderedScenarioIds[i];
+
+      // Stop check (including emergency-stop listener setting isRunning to false)
+      if (!this.state.isRunning) {
+        this.log('[Batch Runner] Execution stopped');
+        break;
+      }
+
+      const stopRequested = await invoke<boolean>('is_stop_requested');
+      if (stopRequested || this.abortController.signal.aborted) {
+        this.log('[Batch Runner] Stop requested');
+        break;
+      }
+
+      const scenario = scenarios.find((s) => s.id === scenarioId);
+      if (!scenario) continue;
+
+      this.state.currentIndex = i;
+      this.log(
+        `[Batch Runner] シナリオ開始 (${i + 1}/${orderedScenarioIds.length}): ${scenario.title}`
+      );
+
+      // Execute scenario
+      const agentResult = await runAgentLoop({
+        scenario: {
+          id: scenario.id,
+          title: scenario.title,
+          description: scenario.description,
+          status: 'pending',
+        },
+        abortSignal: this.abortController.signal,
+        onLog: this.log.bind(this),
+        config: options.agentConfig,
+      });
+
+      // Convert result
+      const executionResult: ScenarioExecutionResult = {
+        scenarioId: scenario.id,
+        title: scenario.title,
+        success: agentResult.success,
+        error: agentResult.error,
+        completedActions: agentResult.completedActionCount ?? 0,
+        failedAtAction: agentResult.failedAtAction,
+        actionHistory: agentResult.executedActions.map((a) => ({
+          index: a.index,
+          action: a.action,
+          description: a.description,
+          success: a.success,
+          timestamp: a.timestamp,
+        })),
+        lastSuccessfulAction: agentResult.lastSuccessfulAction,
+      };
+
+      results.push(executionResult);
+
+      if (agentResult.success) {
+        successCount++;
+        this.log(`[Batch Runner] シナリオ成功: ${scenario.title}`);
+      } else {
+        failureCount++;
+        this.log(
+          `[Batch Runner] シナリオ失敗: ${scenario.title} - ${agentResult.error}`
+        );
+
+        // Stop if stopOnFailure is set
+        if (this.state.stopOnFailure) {
+          this.log('[Batch Runner] stopOnFailure enabled - stopping');
+          break;
+        }
+      }
+    }
+
+    this.state.isRunning = false;
+
+    return {
+      totalScenarios: orderedScenarioIds.length,
+      successCount,
+      failureCount,
+      results,
+      executedAt: new Date(),
+    };
+  }
 }
 
 // Singleton instance
 export const scenarioRunner = new ScenarioRunner();
+
+/**
+ * Convenience function: run selected scenarios using singleton
+ */
+export async function runSelectedScenarios(
+  orderedScenarioIds: string[],
+  scenarios: StoredScenario[],
+  options: ScenarioRunnerOptions = {}
+): Promise<BatchExecutionResult> {
+  return scenarioRunner.runSelected(orderedScenarioIds, scenarios, options);
+}

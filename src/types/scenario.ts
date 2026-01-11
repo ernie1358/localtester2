@@ -15,10 +15,12 @@ export type ScenarioStatus =
 
 /** A test scenario parsed from user input */
 export interface Scenario {
-  id: number;
+  id: string;
   title: string;
   description: string;
   status: ScenarioStatus;
+  /** Order index for sorting (optional for runtime scenarios) */
+  orderIndex?: number;
   error?: string;
   iterations?: number;
   startedAt?: Date;
@@ -54,7 +56,7 @@ export function mapTestResultStatusToScenarioStatus(
 /** Result of scenario parsing */
 export interface ScenarioSplitResult {
   scenarios: Array<{
-    id: number;
+    id: string;
     title: string;
     description: string;
   }>;

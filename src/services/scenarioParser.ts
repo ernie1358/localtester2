@@ -65,21 +65,23 @@ export async function parseScenarios(userInput: string): Promise<Scenario[]> {
       throw new Error('No scenarios in response');
     }
 
-    return result.scenarios.map((s) => ({
-      id: s.id,
+    return result.scenarios.map((s, index) => ({
+      id: crypto.randomUUID(),
       title: s.title,
       description: s.description,
       status: 'pending' as const,
+      orderIndex: index,
     }));
   } catch (error) {
     // Fallback: treat entire input as single scenario
     console.warn('Scenario split failed, treating as single scenario:', error);
     return [
       {
-        id: 1,
+        id: crypto.randomUUID(),
         title: 'テストシナリオ',
         description: userInput,
         status: 'pending',
+        orderIndex: 0,
       },
     ];
   }

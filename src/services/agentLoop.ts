@@ -52,6 +52,15 @@ export interface AgentLoopOptions {
   config?: Partial<AgentLoopConfig>;
 }
 
+/** Executed action record for tracking action history */
+export interface ExecutedActionRecord {
+  index: number;
+  action: string;
+  description: string;
+  success: boolean;
+  timestamp: Date;
+}
+
 /** Result of agent loop execution (enhanced with TestResult) */
 export interface AgentLoopResult {
   success: boolean;
@@ -60,6 +69,14 @@ export interface AgentLoopResult {
   testResult: TestResult;
   expectedActions?: ExpectedAction[];
   isFromFallback?: boolean;
+  /** Executed action history */
+  executedActions: ExecutedActionRecord[];
+  /** Number of completed actions */
+  completedActionCount: number;
+  /** Description of failed action (if any) */
+  failedAtAction?: string;
+  /** Last successfully completed action description */
+  lastSuccessfulAction?: string;
 }
 
 /**
@@ -124,6 +141,9 @@ export async function runAgentLoop(
   // Claude response text for context
   let lastClaudeResponseText = '';
 
+  // Executed action records for tracking (new for batch execution)
+  const executedActions: ExecutedActionRecord[] = [];
+
   // Previous screenshot for screen change detection
   let previousScreenshotBase64 = '';
 
@@ -180,6 +200,9 @@ export async function runAgentLoop(
           }),
           expectedActions,
           isFromFallback,
+          executedActions,
+          completedActionCount: executedActions.filter((a) => a.success).length,
+          lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
         };
       }
 
@@ -199,6 +222,9 @@ export async function runAgentLoop(
           }),
           expectedActions,
           isFromFallback,
+          executedActions,
+          completedActionCount: executedActions.filter((a) => a.success).length,
+          lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
         };
       }
 
@@ -217,6 +243,9 @@ export async function runAgentLoop(
           }),
           expectedActions,
           isFromFallback,
+          executedActions,
+          completedActionCount: executedActions.filter((a) => a.success).length,
+          lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
         };
       }
 
@@ -243,6 +272,9 @@ export async function runAgentLoop(
           }),
           expectedActions,
           isFromFallback,
+          executedActions,
+          completedActionCount: executedActions.filter((a) => a.success).length,
+          lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
         };
       }
 
@@ -296,6 +328,9 @@ export async function runAgentLoop(
             }),
             expectedActions,
             isFromFallback,
+            executedActions,
+            completedActionCount: executedActions.filter((a) => a.success).length,
+            lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
           };
         } else {
           log(`[Agent Loop] Scenario failed: ${analyzeResult.analysis}`);
@@ -315,6 +350,10 @@ export async function runAgentLoop(
             }),
             expectedActions,
             isFromFallback,
+            executedActions,
+            completedActionCount: executedActions.filter((a) => a.success).length,
+            lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
+            failedAtAction: analyzeResult.analysis,
           };
         }
       }
@@ -350,6 +389,9 @@ export async function runAgentLoop(
             }),
             expectedActions,
             isFromFallback,
+            executedActions,
+            completedActionCount: executedActions.filter((a) => a.success).length,
+            lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
           };
         }
 
@@ -369,6 +411,9 @@ export async function runAgentLoop(
             }),
             expectedActions,
             isFromFallback,
+            executedActions,
+            completedActionCount: executedActions.filter((a) => a.success).length,
+            lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
           };
         }
 
@@ -376,6 +421,7 @@ export async function runAgentLoop(
 
         // Loop detection (primary check)
         if (detectLoop(actionHistory, action, config)) {
+          const loopActionDetails = formatActionDetails(action, captureResult.scaleFactor, captureResult.displayScaleFactor);
           return {
             success: false,
             error: `Infinite loop detected: same action repeated ${config.loopDetectionThreshold} times`,
@@ -386,11 +432,15 @@ export async function runAgentLoop(
               failureDetails: `Same action repeated ${config.loopDetectionThreshold} times (by loopDetector)`,
               completedSteps: iteration,
               completedActionIndex,
-              lastAction: formatActionDetails(action, captureResult.scaleFactor, captureResult.displayScaleFactor),
+              lastAction: loopActionDetails,
               startedAt,
             }),
             expectedActions,
             isFromFallback,
+            executedActions,
+            completedActionCount: executedActions.filter((a) => a.success).length,
+            lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
+            failedAtAction: loopActionDetails,
           };
         }
 
@@ -403,6 +453,15 @@ export async function runAgentLoop(
         if (!actionResult.success) {
           const failureReason = mapExecutionErrorToFailureReason(actionResult.error || 'Unknown error');
           log(`[Agent Loop] Action execution failed: ${actionResult.error}`);
+
+          // Record failed action
+          executedActions.push({
+            index: executedActions.length,
+            action: action.action,
+            description: actionDetails,
+            success: false,
+            timestamp: new Date(),
+          });
 
           return {
             success: false,
@@ -419,8 +478,21 @@ export async function runAgentLoop(
             }),
             expectedActions,
             isFromFallback,
+            executedActions,
+            completedActionCount: executedActions.filter((a) => a.success).length,
+            lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
+            failedAtAction: actionDetails,
           };
         }
+
+        // Record successful action
+        executedActions.push({
+          index: executedActions.length,
+          action: action.action,
+          description: actionDetails,
+          success: true,
+          timestamp: new Date(),
+        });
 
         // Add to action history
         actionHistory.push(createActionRecord(toolUse.id, action));
@@ -523,6 +595,10 @@ export async function runAgentLoop(
             }),
             expectedActions,
             isFromFallback,
+            executedActions,
+            completedActionCount: executedActions.filter((a) => a.success).length,
+            lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
+            failedAtAction: actionDetails,
           };
         }
 
@@ -558,6 +634,10 @@ export async function runAgentLoop(
             }),
             expectedActions,
             isFromFallback,
+            executedActions,
+            completedActionCount: executedActions.filter((a) => a.success).length,
+            lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
+            failedAtAction: actionDetails,
           };
         }
 
@@ -612,6 +692,9 @@ export async function runAgentLoop(
       }),
       expectedActions,
       isFromFallback,
+      executedActions,
+      completedActionCount: executedActions.filter((a) => a.success).length,
+      lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -630,6 +713,10 @@ export async function runAgentLoop(
       }),
       expectedActions,
       isFromFallback,
+      executedActions,
+      completedActionCount: executedActions.filter((a) => a.success).length,
+      lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
+      failedAtAction: errorMessage,
     };
   }
 }

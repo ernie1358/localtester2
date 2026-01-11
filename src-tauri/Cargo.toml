@@ -42,6 +42,7 @@ thiserror = "1"
 
 # Environment variables
 dotenv = "0.15"
+tauri-plugin-sql = { version = "2.3.1", features = ["sqlite"] }
 
 # macOS permissions are handled directly via xcap and enigo capability checks
 

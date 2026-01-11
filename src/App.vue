@@ -1,207 +1,196 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
-import { parseScenarios } from './services/scenarioParser';
-import { scenarioRunner } from './services/scenarioRunner';
-import type { Scenario, ScenarioRunnerState, PermissionStatus, FailureReason } from './types';
+import ScenarioList from './components/ScenarioList.vue';
+import ScenarioForm from './components/ScenarioForm.vue';
+import DeleteConfirmDialog from './components/DeleteConfirmDialog.vue';
+import {
+  getAllScenarios,
+  createScenario,
+  updateScenario,
+  deleteScenario,
+  updateScenarioOrders,
+} from './services/scenarioDatabase';
+import { runSelectedScenarios, scenarioRunner } from './services/scenarioRunner';
+import { openResultWindow } from './services/resultWindowService';
+import type { StoredScenario, PermissionStatus } from './types';
 
 // State
-const scenarioInput = ref('');
+const scenarios = ref<StoredScenario[]>([]);
+const selectedIds = ref<Set<string>>(new Set());
 const isRunning = ref(false);
-const scenarios = ref<Scenario[]>([]);
-const currentScenarioIndex = ref(-1);
 const logs = ref<string[]>([]);
+
+// Modal state
+const showScenarioForm = ref(false);
+const editingScenario = ref<StoredScenario | null>(null);
+const showDeleteConfirm = ref(false);
+const deletingScenario = ref<StoredScenario | null>(null);
+
+// Permission state
 const permissionStatus = ref<PermissionStatus | null>(null);
 const apiKeyConfigured = ref(false);
 const errorMessage = ref('');
 
-// Computed: Test summary counts
-const testSummary = computed(() => {
-  const passed = scenarios.value.filter((s) => s.status === 'completed').length;
-  const failed = scenarios.value.filter((s) => s.status === 'failed').length;
-  const stopped = scenarios.value.filter((s) => s.status === 'stopped').length;
-  const pending = scenarios.value.filter(
-    (s) => s.status === 'pending' || s.status === 'running' || s.status === 'skipped'
-  ).length;
-  return { passed, failed, stopped, pending, total: scenarios.value.length };
-});
+// ScenarioList ref
+const scenarioListRef = ref<InstanceType<typeof ScenarioList> | null>(null);
 
-// Check permissions and API key on mount
+// Computed
+const selectedCount = computed(() => selectedIds.value.size);
+const canExecute = computed(
+  () => selectedCount.value > 0 && !isRunning.value && apiKeyConfigured.value
+);
+
+// Lifecycle
 onMounted(async () => {
   try {
-    // Check permissions (macOS)
+    // Check permissions
     permissionStatus.value = await invoke<PermissionStatus>('check_permissions');
-
     // Check API key
     apiKeyConfigured.value = await invoke<boolean>('is_api_key_configured', {
       keyName: 'anthropic',
     });
+    // Load scenarios
+    await loadScenarios();
   } catch (error) {
     console.error('Initialization error:', error);
+    errorMessage.value =
+      error instanceof Error ? error.message : String(error);
   }
 });
 
-// Cleanup on unmount
 onUnmounted(async () => {
   await scenarioRunner.destroy();
 });
 
-// Request permissions
+// Methods
+async function loadScenarios() {
+  try {
+    scenarios.value = await getAllScenarios();
+  } catch (error) {
+    console.error('Failed to load scenarios:', error);
+    addLog(
+      `シナリオ読み込みエラー: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
 async function requestPermissions() {
   try {
     await invoke('request_screen_recording_permission');
     await invoke('request_accessibility_permission');
-    // Re-check permissions
     permissionStatus.value = await invoke<PermissionStatus>('check_permissions');
   } catch (error) {
     console.error('Permission request error:', error);
   }
 }
 
-// Start test execution
-async function startTest() {
-  if (!scenarioInput.value.trim()) {
-    errorMessage.value = 'Please enter a test scenario';
-    return;
+// Scenario CRUD
+function openNewScenarioForm() {
+  editingScenario.value = null;
+  showScenarioForm.value = true;
+}
+
+function openEditForm(scenario: StoredScenario) {
+  editingScenario.value = scenario;
+  showScenarioForm.value = true;
+}
+
+async function handleSaveScenario(title: string, description: string) {
+  try {
+    if (editingScenario.value) {
+      await updateScenario(editingScenario.value.id, title, description);
+      addLog(`シナリオを更新しました: ${title}`);
+    } else {
+      await createScenario(title, description);
+      addLog(`シナリオを登録しました: ${title}`);
+    }
+    await loadScenarios();
+    showScenarioForm.value = false;
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error ? error.message : String(error);
   }
+}
+
+function openDeleteConfirm(scenario: StoredScenario) {
+  deletingScenario.value = scenario;
+  showDeleteConfirm.value = true;
+}
+
+async function handleDeleteScenario() {
+  if (!deletingScenario.value) return;
+  try {
+    await deleteScenario(deletingScenario.value.id);
+    selectedIds.value.delete(deletingScenario.value.id);
+    addLog(`シナリオを削除しました: ${deletingScenario.value.title}`);
+    await loadScenarios();
+    showDeleteConfirm.value = false;
+    deletingScenario.value = null;
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function handleOrderUpdate(newOrder: StoredScenario[]) {
+  scenarios.value = newOrder;
+  const orders = newOrder.map((s, i) => ({ id: s.id, orderIndex: i }));
+  try {
+    await updateScenarioOrders(orders);
+  } catch (error) {
+    console.error('Failed to update order:', error);
+  }
+}
+
+// Execution
+async function executeSelected() {
+  if (!canExecute.value) return;
 
   errorMessage.value = '';
   logs.value = [];
   isRunning.value = true;
 
   try {
-    // Parse scenarios
-    addLog('Parsing scenarios...');
-    const parsedScenarios = await parseScenarios(scenarioInput.value);
-    scenarios.value = parsedScenarios;
-    addLog(`Found ${parsedScenarios.length} scenario(s)`);
+    // Get selected IDs in display order from component
+    const orderedIds = scenarioListRef.value?.getSelectedIdsInOrder() ?? [...selectedIds.value];
 
-    // Run scenarios
-    await scenarioRunner.run(parsedScenarios, {
+    addLog(`${orderedIds.length}個のシナリオを実行開始...`);
+
+    const result = await runSelectedScenarios(orderedIds, scenarios.value, {
       stopOnFailure: false,
-      onStateChange: handleStateChange,
       onLog: addLog,
     });
 
-    addLog('All scenarios completed');
+    addLog(
+      `実行完了: 成功 ${result.successCount}件 / 失敗 ${result.failureCount}件`
+    );
+
+    // Open result window
+    await openResultWindow(result);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     errorMessage.value = msg;
-    addLog(`Error: ${msg}`);
+    addLog(`エラー: ${msg}`);
   } finally {
     isRunning.value = false;
   }
 }
 
-// Stop test execution
-function stopTest() {
+function stopExecution() {
   scenarioRunner.stop();
-  addLog('Test execution stopped by user');
+  addLog('実行を停止しました');
 }
 
-// Handle state changes from runner
-function handleStateChange(state: ScenarioRunnerState) {
-  scenarios.value = state.scenarios;
-  currentScenarioIndex.value = state.currentIndex;
-  isRunning.value = state.isRunning;
-}
-
-// Add log message
 function addLog(message: string) {
   const timestamp = new Date().toLocaleTimeString();
   logs.value.push(`[${timestamp}] ${message}`);
-
-  // Auto-scroll to bottom
   setTimeout(() => {
     const logContainer = document.querySelector('.log-container');
     if (logContainer) {
       logContainer.scrollTop = logContainer.scrollHeight;
     }
   }, 0);
-}
-
-// Get status class for scenario
-function getStatusClass(status: string): string {
-  switch (status) {
-    case 'completed':
-      return 'status-completed';
-    case 'failed':
-      return 'status-failed';
-    case 'running':
-      return 'status-running';
-    case 'stopped':
-      return 'status-stopped';
-    case 'skipped':
-      return 'status-skipped';
-    default:
-      return 'status-pending';
-  }
-}
-
-// Get status label
-function getStatusLabel(status: string): string {
-  switch (status) {
-    case 'completed':
-      return 'Completed';
-    case 'failed':
-      return 'Failed';
-    case 'running':
-      return 'Running...';
-    case 'stopped':
-      return 'Stopped';
-    case 'skipped':
-      return 'Skipped';
-    default:
-      return 'Pending';
-  }
-}
-
-// Get result icon for scenario status
-function getResultIcon(status: string): string {
-  switch (status) {
-    case 'completed':
-      return '✓';
-    case 'failed':
-      return '✗';
-    case 'running':
-      return '⏳';
-    case 'stopped':
-      return '⏹';
-    case 'skipped':
-      return '⏭';
-    default:
-      return '○';
-  }
-}
-
-// Get failure reason label in Japanese
-function getFailureReasonLabel(reason: FailureReason | undefined): string {
-  if (!reason) return '';
-  const labels: Record<FailureReason, string> = {
-    element_not_found: '要素が見つからない',
-    action_no_effect: '操作が効果なし',
-    action_execution_error: 'アクション実行エラー',
-    stuck_in_loop: 'ループにスタック',
-    unexpected_state: '予期しない画面状態',
-    action_mismatch: 'アクション不一致',
-    incomplete_actions: '未完了アクション',
-    invalid_result_format: '無効な結果形式',
-    max_iterations: '最大反復回数超過',
-    api_error: 'APIエラー',
-    user_stopped: 'ユーザー停止',
-    aborted: '中断',
-    unknown: '不明',
-  };
-  return labels[reason] || reason;
-}
-
-// Get progress display text
-function getProgressText(scenario: Scenario): string {
-  if (!scenario.result) return '';
-  const { completedActionIndex } = scenario.result;
-  const totalSteps = scenario.expectedActions?.length || 0;
-  if (totalSteps === 0) return '';
-  return `${completedActionIndex}/${totalSteps} ステップ完了`;
 }
 </script>
 
@@ -212,12 +201,16 @@ function getProgressText(scenario: Scenario): string {
 
     <!-- Permission Warning -->
     <div
-      v-if="permissionStatus && (!permissionStatus.screenRecording || !permissionStatus.accessibility)"
+      v-if="
+        permissionStatus &&
+        (!permissionStatus.screenRecording || !permissionStatus.accessibility)
+      "
       class="warning-box"
     >
       <p>
         <strong>Permissions Required:</strong>
-        Screen Recording and Accessibility permissions are required for this app to work.
+        Screen Recording and Accessibility permissions are required for this app
+        to work.
       </p>
       <button @click="requestPermissions">Request Permissions</button>
     </div>
@@ -235,115 +228,77 @@ function getProgressText(scenario: Scenario): string {
       {{ errorMessage }}
     </div>
 
-    <!-- Scenario Input -->
-    <div class="input-section">
-      <label for="scenario-input">Test Scenarios (Natural Language)</label>
-      <textarea
-        id="scenario-input"
-        v-model="scenarioInput"
-        placeholder="Enter your test scenarios here...&#10;&#10;Example:&#10;1. Open Chrome and navigate to google.com&#10;2. Search for 'Tauri framework'&#10;3. Click the first result"
-        :disabled="isRunning"
-        rows="6"
-      ></textarea>
-
-      <div class="button-row">
+    <!-- Scenario Management Section -->
+    <section class="management-section">
+      <div class="section-header">
+        <h2>シナリオ管理</h2>
         <button
-          v-if="!isRunning"
-          @click="startTest"
-          :disabled="!apiKeyConfigured"
+          @click="openNewScenarioForm"
+          :disabled="isRunning"
           class="primary-button"
         >
-          Start Test
-        </button>
-        <button v-else @click="stopTest" class="danger-button">
-          Stop (Shift+Esc)
+          + 新規シナリオ登録
         </button>
       </div>
-    </div>
 
-    <!-- Test Summary -->
-    <div v-if="scenarios.length > 0 && !isRunning" class="test-summary">
-      <h2>Test Results</h2>
-      <div class="summary-grid">
-        <div class="summary-item summary-passed">
-          <span class="summary-count">{{ testSummary.passed }}</span>
-          <span class="summary-label">Passed</span>
-        </div>
-        <div class="summary-item summary-failed">
-          <span class="summary-count">{{ testSummary.failed }}</span>
-          <span class="summary-label">Failed</span>
-        </div>
-        <div class="summary-item summary-stopped">
-          <span class="summary-count">{{ testSummary.stopped }}</span>
-          <span class="summary-label">Stopped</span>
-        </div>
-        <div class="summary-item summary-pending">
-          <span class="summary-count">{{ testSummary.pending }}</span>
-          <span class="summary-label">Pending</span>
-        </div>
-      </div>
-    </div>
+      <!-- Scenario List Component -->
+      <ScenarioList
+        ref="scenarioListRef"
+        :scenarios="scenarios"
+        :selected-ids="selectedIds"
+        :is-running="isRunning"
+        @update:selectedIds="selectedIds = $event"
+        @update:order="handleOrderUpdate"
+        @edit="openEditForm"
+        @delete="openDeleteConfirm"
+      />
 
-    <!-- Scenario List -->
-    <div v-if="scenarios.length > 0" class="scenario-list">
-      <h2>Scenarios</h2>
-      <div
-        v-for="(scenario, index) in scenarios"
-        :key="scenario.id"
-        class="scenario-item"
-        :class="[
-          { active: index === currentScenarioIndex },
-          `result-${scenario.status}`
-        ]"
-      >
-        <div class="scenario-header">
-          <span class="scenario-icon" :class="getStatusClass(scenario.status)">
-            {{ getResultIcon(scenario.status) }}
-          </span>
-          <span class="scenario-title">{{ scenario.title }}</span>
-          <span :class="['scenario-status', getStatusClass(scenario.status)]">
-            {{ getStatusLabel(scenario.status) }}
-          </span>
-        </div>
-        <div class="scenario-details">
-          <span v-if="scenario.iterations" class="detail-item">
-            Iterations: {{ scenario.iterations }}
-          </span>
-          <span v-if="getProgressText(scenario)" class="detail-item">
-            {{ getProgressText(scenario) }}
-          </span>
-        </div>
-        <!-- Failure Details -->
-        <div v-if="scenario.result && scenario.status === 'failed'" class="failure-details">
-          <div v-if="scenario.result.failureReason" class="failure-reason">
-            <span class="failure-label">Reason:</span>
-            <span class="failure-value">{{ getFailureReasonLabel(scenario.result.failureReason) }}</span>
-          </div>
-          <div v-if="scenario.result.failureDetails" class="failure-message">
-            {{ scenario.result.failureDetails }}
-          </div>
-          <div v-if="scenario.result.claudeAnalysis" class="claude-analysis">
-            <span class="analysis-label">Claude Analysis:</span>
-            {{ scenario.result.claudeAnalysis }}
-          </div>
-        </div>
-        <!-- Error (legacy fallback) -->
-        <div v-else-if="scenario.error" class="scenario-error">
-          {{ scenario.error }}
-        </div>
+      <!-- Execute Button -->
+      <div class="execution-controls">
+        <span class="selected-count">
+          {{ selectedCount }}件選択中
+        </span>
+        <button
+          v-if="!isRunning"
+          @click="executeSelected"
+          :disabled="!canExecute"
+          class="execute-button"
+        >
+          チェックしたシナリオを実行
+        </button>
+        <button v-else @click="stopExecution" class="danger-button">
+          停止 (Shift+Esc)
+        </button>
       </div>
-    </div>
+    </section>
 
     <!-- Execution Log -->
-    <div class="log-section">
-      <h2>Execution Log</h2>
+    <section class="log-section">
+      <h2>実行ログ</h2>
       <div class="log-container">
         <div v-for="(log, index) in logs" :key="index" class="log-item">
           {{ log }}
         </div>
-        <div v-if="logs.length === 0" class="log-empty">No logs yet...</div>
+        <div v-if="logs.length === 0" class="log-empty">
+          ログはまだありません...
+        </div>
       </div>
-    </div>
+    </section>
+
+    <!-- Modals -->
+    <ScenarioForm
+      :visible="showScenarioForm"
+      :scenario="editingScenario"
+      @save="handleSaveScenario"
+      @cancel="showScenarioForm = false"
+    />
+
+    <DeleteConfirmDialog
+      :visible="showDeleteConfirm"
+      :scenario-title="deletingScenario?.title ?? ''"
+      @confirm="handleDeleteScenario"
+      @cancel="showDeleteConfirm = false"
+    />
   </main>
 </template>
 
@@ -353,10 +308,8 @@ function getProgressText(scenario: Scenario): string {
   font-size: 16px;
   line-height: 24px;
   font-weight: 400;
-
   color: #0f0f0f;
   background-color: #f6f6f6;
-
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -378,9 +331,11 @@ body {
   margin: 0;
   padding: 0;
 }
+</style>
 
+<style scoped>
 .container {
-  max-width: 800px;
+  max-width: 900px;
   margin: 0 auto;
   padding: 20px;
 }
@@ -399,6 +354,7 @@ h1 {
 h2 {
   font-size: 1.2rem;
   margin-bottom: 10px;
+  margin-top: 0;
 }
 
 .warning-box,
@@ -426,7 +382,6 @@ h2 {
     border-color: #665200;
     color: #ffc107;
   }
-
   .error-box {
     background-color: #2c0b0e;
     border-color: #491217;
@@ -438,58 +393,27 @@ h2 {
   margin-top: 10px;
 }
 
-.input-section {
-  margin-bottom: 20px;
+.management-section {
+  margin-bottom: 24px;
 }
 
-.input-section label {
-  display: block;
-  margin-bottom: 8px;
-  font-weight: 500;
-}
-
-textarea {
-  width: 100%;
-  padding: 12px;
-  border-radius: 8px;
-  border: 1px solid #ddd;
-  font-family: inherit;
-  font-size: 14px;
-  resize: vertical;
-  background-color: #fff;
-}
-
-@media (prefers-color-scheme: dark) {
-  textarea {
-    background-color: #2a2a2a;
-    border-color: #444;
-    color: #f6f6f6;
-  }
-}
-
-textarea:disabled {
-  opacity: 0.6;
-}
-
-.button-row {
-  margin-top: 12px;
+.section-header {
   display: flex;
-  gap: 10px;
-}
-
-button {
-  padding: 10px 20px;
-  border-radius: 8px;
-  border: none;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
 }
 
 .primary-button {
   background-color: #24c8db;
   color: #fff;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
 .primary-button:hover:not(:disabled) {
@@ -501,252 +425,67 @@ button {
   cursor: not-allowed;
 }
 
+.execution-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+  padding: 16px;
+  background: #f8f9fa;
+  border-radius: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .execution-controls {
+    background: #2a2a2a;
+  }
+}
+
+.selected-count {
+  font-weight: 500;
+  color: #666;
+}
+
+@media (prefers-color-scheme: dark) {
+  .selected-count {
+    color: #aaa;
+  }
+}
+
+.execute-button {
+  background-color: #28a745;
+  color: #fff;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.execute-button:hover:not(:disabled) {
+  background-color: #218838;
+}
+
+.execute-button:disabled {
+  background-color: #999;
+  cursor: not-allowed;
+}
+
 .danger-button {
   background-color: #dc3545;
   color: #fff;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .danger-button:hover {
   background-color: #c82333;
-}
-
-.scenario-list {
-  margin-bottom: 20px;
-}
-
-.scenario-item {
-  padding: 12px;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  margin-bottom: 8px;
-  background-color: #fff;
-}
-
-@media (prefers-color-scheme: dark) {
-  .scenario-item {
-    background-color: #2a2a2a;
-    border-color: #444;
-  }
-}
-
-.scenario-item.active {
-  border-color: #24c8db;
-  border-width: 2px;
-}
-
-.scenario-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.scenario-title {
-  font-weight: 500;
-}
-
-.scenario-status {
-  font-size: 12px;
-  padding: 4px 8px;
-  border-radius: 4px;
-}
-
-.status-pending {
-  background-color: #e0e0e0;
-  color: #666;
-}
-
-.status-running {
-  background-color: #24c8db;
-  color: #fff;
-}
-
-.status-completed {
-  background-color: #28a745;
-  color: #fff;
-}
-
-.status-failed {
-  background-color: #dc3545;
-  color: #fff;
-}
-
-.status-stopped {
-  background-color: #ffc107;
-  color: #000;
-}
-
-.status-skipped {
-  background-color: #6c757d;
-  color: #fff;
-}
-
-.scenario-details {
-  margin-top: 8px;
-  font-size: 12px;
-  color: #888;
-  display: flex;
-  gap: 16px;
-}
-
-.detail-item {
-  display: inline-block;
-}
-
-.scenario-error {
-  color: #dc3545;
-  display: block;
-  margin-top: 4px;
-}
-
-/* Test Summary */
-.test-summary {
-  margin-bottom: 20px;
-}
-
-.summary-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-}
-
-.summary-item {
-  padding: 16px;
-  border-radius: 8px;
-  text-align: center;
-  border: 1px solid #ddd;
-}
-
-@media (prefers-color-scheme: dark) {
-  .summary-item {
-    border-color: #444;
-  }
-}
-
-.summary-count {
-  display: block;
-  font-size: 2rem;
-  font-weight: bold;
-}
-
-.summary-label {
-  display: block;
-  font-size: 0.85rem;
-  margin-top: 4px;
-}
-
-.summary-passed {
-  background-color: rgba(40, 167, 69, 0.15);
-  border-color: #28a745;
-}
-
-.summary-passed .summary-count {
-  color: #28a745;
-}
-
-.summary-failed {
-  background-color: rgba(220, 53, 69, 0.15);
-  border-color: #dc3545;
-}
-
-.summary-failed .summary-count {
-  color: #dc3545;
-}
-
-.summary-stopped {
-  background-color: rgba(255, 193, 7, 0.15);
-  border-color: #ffc107;
-}
-
-.summary-stopped .summary-count {
-  color: #ffc107;
-}
-
-.summary-pending {
-  background-color: rgba(108, 117, 125, 0.15);
-  border-color: #6c757d;
-}
-
-.summary-pending .summary-count {
-  color: #6c757d;
-}
-
-/* Scenario Icon */
-.scenario-icon {
-  font-size: 1.2rem;
-  margin-right: 8px;
-  width: 24px;
-  text-align: center;
-}
-
-/* Result-based scenario styling */
-.result-completed {
-  border-left: 4px solid #28a745;
-}
-
-.result-failed {
-  border-left: 4px solid #dc3545;
-}
-
-.result-stopped {
-  border-left: 4px solid #ffc107;
-}
-
-.result-running {
-  border-left: 4px solid #24c8db;
-}
-
-/* Failure Details */
-.failure-details {
-  margin-top: 12px;
-  padding: 12px;
-  background-color: rgba(220, 53, 69, 0.1);
-  border-radius: 6px;
-  font-size: 13px;
-}
-
-@media (prefers-color-scheme: dark) {
-  .failure-details {
-    background-color: rgba(220, 53, 69, 0.2);
-  }
-}
-
-.failure-reason {
-  margin-bottom: 8px;
-}
-
-.failure-label,
-.analysis-label {
-  font-weight: 600;
-  color: #dc3545;
-  margin-right: 8px;
-}
-
-.failure-value {
-  color: #dc3545;
-}
-
-.failure-message {
-  color: #888;
-  margin-bottom: 8px;
-  line-height: 1.4;
-}
-
-.claude-analysis {
-  color: #666;
-  font-style: italic;
-  border-top: 1px solid rgba(220, 53, 69, 0.3);
-  padding-top: 8px;
-  margin-top: 8px;
-}
-
-@media (prefers-color-scheme: dark) {
-  .failure-message {
-    color: #aaa;
-  }
-
-  .claude-analysis {
-    color: #999;
-  }
 }
 
 .log-section {

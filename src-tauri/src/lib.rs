@@ -11,7 +11,18 @@ pub mod utils;
 
 use commands::{config, control, input, permission, screenshot};
 use state::AppState;
+use tauri_plugin_sql::{Migration, MigrationKind};
 use utils::hotkey::register_emergency_stop;
+
+/// Get SQLite migrations
+fn get_migrations() -> Vec<Migration> {
+    vec![Migration {
+        version: 1,
+        description: "create_scenarios_table",
+        sql: include_str!("../migrations/001_create_scenarios.sql"),
+        kind: MigrationKind::Up,
+    }]
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -21,6 +32,12 @@ pub fn run() {
     tauri::Builder::default()
         // Initialize plugins
         .plugin(tauri_plugin_opener::init())
+        // SQLite plugin with migrations
+        .plugin(
+            tauri_plugin_sql::Builder::default()
+                .add_migrations("sqlite:xenotester.db", get_migrations())
+                .build(),
+        )
         // Set up emergency stop hotkey
         .setup(|app| {
             // Register emergency stop hotkey (Shift+Escape)

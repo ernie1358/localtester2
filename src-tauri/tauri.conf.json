@@ -12,9 +12,10 @@
   "app": {
     "windows": [
       {
-        "title": "xenotester",
-        "width": 800,
-        "height": 600
+        "label": "main",
+        "title": "Xenotester",
+        "width": 900,
+        "height": 700
       }
     ],
     "security": {
