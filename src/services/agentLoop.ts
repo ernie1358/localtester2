@@ -1,0 +1,373 @@
+/**
+ * Agent Loop - Execute a single scenario with Computer Use API
+ */
+
+import { invoke } from '@tauri-apps/api/core';
+import type {
+  BetaMessageParam,
+  BetaMessage,
+  BetaToolUseBlock,
+  BetaToolResultBlockParam,
+} from '@anthropic-ai/sdk/resources/beta/messages';
+import { getClaudeClient, buildComputerTool } from './claudeClient';
+import { purgeOldImages } from './historyManager';
+import { toScreenCoordinate } from '../utils/coordinateScaler';
+import { detectLoop, createActionRecord } from '../utils/loopDetector';
+import type {
+  Scenario,
+  CaptureResult,
+  ComputerAction,
+  ActionRecord,
+  AgentLoopConfig,
+} from '../types';
+import { DEFAULT_AGENT_LOOP_CONFIG } from '../types';
+
+/** Options for agent loop */
+export interface AgentLoopOptions {
+  scenario: Scenario;
+  abortSignal: AbortSignal;
+  onIteration?: (iteration: number) => void;
+  onLog?: (message: string) => void;
+  config?: Partial<AgentLoopConfig>;
+}
+
+/** Result of agent loop execution */
+export interface AgentLoopResult {
+  success: boolean;
+  error?: string;
+  iterations: number;
+}
+
+/**
+ * Execute the agent loop for a single scenario
+ */
+export async function runAgentLoop(
+  options: AgentLoopOptions
+): Promise<AgentLoopResult> {
+  const config: AgentLoopConfig = {
+    ...DEFAULT_AGENT_LOOP_CONFIG,
+    ...options.config,
+  };
+
+  const log = options.onLog ?? console.log;
+  let messages: BetaMessageParam[] = [];
+  const actionHistory: ActionRecord[] = [];
+  let captureResult: CaptureResult;
+  let iteration = 0;
+
+  try {
+    // Initial screenshot
+    log('[Agent Loop] Capturing initial screenshot...');
+    captureResult = await invoke<CaptureResult>('capture_screen');
+
+    // Initial message with scenario description and screenshot
+    messages = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: options.scenario.description },
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: 'image/png',
+              data: captureResult.imageBase64,
+            },
+          },
+        ],
+      },
+    ];
+
+    // Main agent loop
+    while (iteration < config.maxIterationsPerScenario) {
+      // Check for abort
+      if (options.abortSignal.aborted) {
+        return { success: false, error: 'Aborted', iterations: iteration };
+      }
+
+      const stopRequested = await invoke<boolean>('is_stop_requested');
+      if (stopRequested) {
+        return { success: false, error: 'Stopped by user', iterations: iteration };
+      }
+
+      options.onIteration?.(iteration + 1);
+      log(`[Agent Loop] Iteration ${iteration + 1}/${config.maxIterationsPerScenario}`);
+
+      // Call Claude API
+      const response = await callClaudeAPI(messages, captureResult, options.abortSignal);
+
+      // Handle null response (aborted)
+      if (!response) {
+        return { success: false, error: 'API call aborted', iterations: iteration };
+      }
+
+      // Check for completion (no tool_use)
+      if (isScenarioComplete(response)) {
+        log('[Agent Loop] Scenario completed - no more actions');
+        return { success: true, iterations: iteration + 1 };
+      }
+
+      // Extract tool_use blocks
+      const toolUseBlocks = response.content.filter(
+        (block): block is BetaToolUseBlock => block.type === 'tool_use'
+      );
+
+      // Add assistant message to history
+      messages.push({
+        role: 'assistant',
+        content: response.content,
+      });
+
+      // Process each tool_use
+      const toolResults: BetaToolResultBlockParam[] = [];
+
+      for (const toolUse of toolUseBlocks) {
+        // Check abort before each action
+        if (options.abortSignal.aborted) {
+          return { success: false, error: 'Aborted', iterations: iteration };
+        }
+
+        const stopCheck = await invoke<boolean>('is_stop_requested');
+        if (stopCheck) {
+          return { success: false, error: 'Stopped by user', iterations: iteration };
+        }
+
+        const action = toolUse.input as ComputerAction;
+
+        // Loop detection
+        if (detectLoop(actionHistory, action, config)) {
+          return {
+            success: false,
+            error: `Infinite loop detected: same action repeated ${config.loopDetectionThreshold} times`,
+            iterations: iteration,
+          };
+        }
+
+        // Execute action
+        log(`[Agent Loop] Executing action: ${action.action}`);
+        const actionResult = await executeAction(action, captureResult.scaleFactor);
+
+        // Add to action history
+        actionHistory.push(createActionRecord(toolUse.id, action));
+
+        // Capture result screenshot
+        captureResult = await invoke<CaptureResult>('capture_screen');
+
+        // Build tool result
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: [
+            {
+              type: 'text',
+              text: actionResult.success
+                ? 'Action executed successfully'
+                : `Action failed: ${actionResult.error}`,
+            },
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: 'image/png',
+                data: captureResult.imageBase64,
+              },
+            },
+          ],
+        });
+      }
+
+      // Add tool results to messages
+      messages.push({
+        role: 'user',
+        content: toolResults,
+      });
+
+      // Purge old images if history is too long
+      if (messages.length > 40) {
+        messages = purgeOldImages(messages, 20);
+        log('[Agent Loop] Purged old images from history');
+      }
+
+      iteration++;
+    }
+
+    // Max iterations reached
+    return {
+      success: false,
+      error: `Max iterations (${config.maxIterationsPerScenario}) reached`,
+      iterations: iteration,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    log(`[Agent Loop] Error: ${errorMessage}`);
+    return { success: false, error: errorMessage, iterations: iteration };
+  }
+}
+
+/**
+ * Check if scenario is complete (no tool_use blocks)
+ */
+function isScenarioComplete(response: BetaMessage): boolean {
+  return !response.content.some((block) => block.type === 'tool_use');
+}
+
+/**
+ * Call Claude API with abort support
+ */
+async function callClaudeAPI(
+  messages: BetaMessageParam[],
+  captureResult: CaptureResult,
+  abortSignal: AbortSignal
+): Promise<BetaMessage | null> {
+  try {
+    const client = await getClaudeClient();
+
+    const apiPromise = client.beta.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4096,
+      tools: [buildComputerTool(captureResult)],
+      messages,
+      betas: ['computer-use-2025-01-24'],
+    });
+
+    // Create abort promise
+    const abortPromise = new Promise<never>((_, reject) => {
+      if (abortSignal.aborted) {
+        reject(new DOMException('Aborted', 'AbortError'));
+      }
+      abortSignal.addEventListener('abort', () => {
+        reject(new DOMException('Aborted', 'AbortError'));
+      });
+    });
+
+    // Race between API call and abort
+    const result = await Promise.race([apiPromise, abortPromise]);
+    return result as BetaMessage;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/** Action execution result */
+interface ActionExecutionResult {
+  success: boolean;
+  error?: string;
+}
+
+/**
+ * Execute a computer action via Rust backend
+ */
+async function executeAction(
+  action: ComputerAction,
+  scaleFactor: number
+): Promise<ActionExecutionResult> {
+  try {
+    const { x, y } = action.coordinate
+      ? toScreenCoordinate({ x: action.coordinate[0], y: action.coordinate[1] }, scaleFactor)
+      : { x: 0, y: 0 };
+
+    const { x: startX, y: startY } = action.start_coordinate
+      ? toScreenCoordinate(
+          { x: action.start_coordinate[0], y: action.start_coordinate[1] },
+          scaleFactor
+        )
+      : { x: 0, y: 0 };
+
+    switch (action.action) {
+      case 'screenshot':
+        // No action needed, screenshot is taken after this
+        break;
+
+      case 'left_click':
+        await invoke('left_click', { x, y });
+        break;
+
+      case 'right_click':
+        await invoke('right_click', { x, y });
+        break;
+
+      case 'middle_click':
+        await invoke('middle_click', { x, y });
+        break;
+
+      case 'double_click':
+        await invoke('double_click', { x, y });
+        break;
+
+      case 'triple_click':
+        await invoke('triple_click', { x, y });
+        break;
+
+      case 'mouse_move':
+        await invoke('mouse_move', { x, y });
+        break;
+
+      case 'left_click_drag':
+        await invoke('left_click_drag', {
+          startX,
+          startY,
+          endX: x,
+          endY: y,
+        });
+        break;
+
+      case 'left_mouse_down':
+        await invoke('left_mouse_down', { x, y });
+        break;
+
+      case 'left_mouse_up':
+        await invoke('left_mouse_up', { x, y });
+        break;
+
+      case 'type':
+        if (action.text) {
+          await invoke('type_text', { text: action.text });
+        }
+        break;
+
+      case 'key':
+        if (action.text) {
+          await invoke('key', { keys: action.text });
+        }
+        break;
+
+      case 'scroll':
+        await invoke('scroll', {
+          x,
+          y,
+          direction: action.scroll_direction ?? 'down',
+          amount: action.scroll_amount ?? 3,
+        });
+        break;
+
+      case 'wait':
+        const waitResult = await invoke<boolean>('wait', {
+          durationMs: action.duration ?? 1000,
+        });
+        if (!waitResult) {
+          return { success: false, error: 'Wait cancelled' };
+        }
+        break;
+
+      case 'hold_key':
+        if (action.key) {
+          await invoke('hold_key', {
+            keyName: action.key,
+            hold: action.down ?? true,
+          });
+        }
+        break;
+
+      default:
+        return { success: false, error: `Unknown action: ${action.action}` };
+    }
+
+    return { success: true };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return { success: false, error: errorMessage };
+  }
+}

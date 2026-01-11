@@ -1,0 +1,50 @@
+[package]
+name = "xenotester"
+version = "0.1.0"
+description = "AI Desktop Agent for automated testing using Claude Computer Use"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "xenotester_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri core
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Screen capture
+xcap = "0.8"
+
+# Input automation
+enigo = { version = "0.6", features = ["wayland"] }
+
+# Image processing
+image = "0.25"
+base64 = "0.22"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Global hotkey
+global-hotkey = "0.6"
+
+# Error handling
+thiserror = "1"
+
+# Environment variables
+dotenv = "0.15"
+
+# macOS permissions are handled directly via xcap and enigo capability checks
+
+[features]
+default = []
+# template-matching = ["opencv"]
