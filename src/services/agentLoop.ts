@@ -219,6 +219,9 @@ async function callClaudeAPI(
   captureResult: CaptureResult,
   abortSignal: AbortSignal
 ): Promise<BetaMessage | null> {
+  // Define abort handler for cleanup
+  let abortHandler: (() => void) | null = null;
+
   try {
     const client = await getClaudeClient();
 
@@ -230,14 +233,14 @@ async function callClaudeAPI(
       betas: ['computer-use-2025-01-24'],
     });
 
-    // Create abort promise
+    // Create abort promise with proper cleanup
     const abortPromise = new Promise<never>((_, reject) => {
       if (abortSignal.aborted) {
         reject(new DOMException('Aborted', 'AbortError'));
+        return;
       }
-      abortSignal.addEventListener('abort', () => {
-        reject(new DOMException('Aborted', 'AbortError'));
-      });
+      abortHandler = () => reject(new DOMException('Aborted', 'AbortError'));
+      abortSignal.addEventListener('abort', abortHandler);
     });
 
     // Race between API call and abort
@@ -248,6 +251,11 @@ async function callClaudeAPI(
       return null;
     }
     throw error;
+  } finally {
+    // Clean up abort listener to prevent memory leaks
+    if (abortHandler) {
+      abortSignal.removeEventListener('abort', abortHandler);
+    }
   }
 }
 
@@ -323,15 +331,17 @@ async function executeAction(
         break;
 
       case 'type':
-        if (action.text) {
-          await invoke('type_text', { text: action.text });
+        if (!action.text) {
+          return { success: false, error: 'type action requires text parameter' };
         }
+        await invoke('type_text', { text: action.text });
         break;
 
       case 'key':
-        if (action.text) {
-          await invoke('key', { keys: action.text });
+        if (!action.text) {
+          return { success: false, error: 'key action requires text parameter' };
         }
+        await invoke('key', { keys: action.text });
         break;
 
       case 'scroll':
@@ -353,12 +363,13 @@ async function executeAction(
         break;
 
       case 'hold_key':
-        if (action.key) {
-          await invoke('hold_key', {
-            keyName: action.key,
-            hold: action.down ?? true,
-          });
+        if (!action.key) {
+          return { success: false, error: 'hold_key action requires key parameter' };
         }
+        await invoke('hold_key', {
+          keyName: action.key,
+          hold: action.down ?? true,
+        });
         break;
 
       default:

@@ -15,6 +15,11 @@ export function hashAction(action: ComputerAction): string {
     action.text ?? '',
     action.start_coordinate?.join(',') ?? '',
     action.scroll_direction ?? '',
+    // Include additional fields to prevent false positive loop detection
+    action.scroll_amount?.toString() ?? '',
+    action.duration?.toString() ?? '',
+    action.key ?? '',
+    action.down?.toString() ?? '',
   ].join('|');
 
   // Simple hash function (for production, consider using crypto.subtle.digest)

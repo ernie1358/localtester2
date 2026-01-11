@@ -159,6 +159,11 @@ export class ScenarioRunner {
   public stop(finalStatus: 'stopped' | 'failed' = 'stopped'): void {
     this.state.isRunning = false;
 
+    // Notify Rust backend to stop any ongoing operations (e.g., wait)
+    invoke('request_stop').catch((err) => {
+      console.error('[Scenario Runner] Failed to request stop:', err);
+    });
+
     if (this.abortController) {
       this.abortController.abort();
     }
