@@ -2,6 +2,8 @@
  * Scenario type definitions
  */
 
+import type { TestResult, ExpectedAction, TestResultStatus } from './testResult';
+
 /** Status of a scenario execution */
 export type ScenarioStatus =
   | 'pending'      // Waiting to be executed
@@ -21,6 +23,32 @@ export interface Scenario {
   iterations?: number;
   startedAt?: Date;
   completedAt?: Date;
+  /** Detailed test result */
+  result?: TestResult;
+  /** Expected actions extracted from scenario description */
+  expectedActions?: ExpectedAction[];
+}
+
+/**
+ * Map TestResultStatus to ScenarioStatus
+ * - success → completed
+ * - stopped → stopped (preserve user stop)
+ * - failure/timeout/error/others → failed
+ */
+export function mapTestResultStatusToScenarioStatus(
+  testResultStatus: TestResultStatus
+): ScenarioStatus {
+  switch (testResultStatus) {
+    case 'success':
+      return 'completed';
+    case 'stopped':
+      return 'stopped';
+    case 'failure':
+    case 'timeout':
+    case 'error':
+    default:
+      return 'failed';
+  }
 }
 
 /** Result of scenario parsing */

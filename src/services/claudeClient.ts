@@ -71,3 +71,24 @@ export function buildComputerTool(
 export async function isApiKeyConfigured(): Promise<boolean> {
   return invoke<boolean>('is_api_key_configured', { keyName: 'anthropic' });
 }
+
+/**
+ * シナリオ完了判定用のシステムプロンプト
+ * Claudeに結果をJSON形式で出力することを要求
+ */
+export const RESULT_SCHEMA_INSTRUCTION = `
+重要: シナリオの実行が完了（成功または失敗）した場合、必ず以下のJSON形式で結果を報告してください。
+このJSONは必ずテキスト応答の最後に含めてください。
+
+シナリオが正常に完了した場合:
+\`\`\`json
+{"status": "success", "message": "シナリオが正常に完了しました"}
+\`\`\`
+
+シナリオが失敗した場合（要素が見つからない、操作できないなど）:
+\`\`\`json
+{"status": "failure", "message": "失敗の詳細説明", "failureReason": "要素が見つからない|操作が効果なし|予期しない画面|その他"}
+\`\`\`
+
+まだ進行中の場合は、このJSONを含めずに次のアクションを実行してください。
+`;

@@ -1,5 +1,6 @@
 /**
  * Agent Loop - Execute a single scenario with Computer Use API
+ * Enhanced with test result judgment (v18)
  */
 
 import { invoke } from '@tauri-apps/api/core';
@@ -8,11 +9,27 @@ import type {
   BetaMessage,
   BetaToolUseBlock,
   BetaToolResultBlockParam,
+  BetaTextBlock,
 } from '@anthropic-ai/sdk/resources/beta/messages';
-import { getClaudeClient, buildComputerTool } from './claudeClient';
+import { getClaudeClient, buildComputerTool, RESULT_SCHEMA_INSTRUCTION } from './claudeClient';
 import { purgeOldImages } from './historyManager';
 import { toScreenCoordinate } from '../utils/coordinateScaler';
 import { detectLoop, createActionRecord } from '../utils/loopDetector';
+import {
+  analyzeClaudeResponse,
+  checkProgress,
+  createTestResult,
+  hasSignificantScreenChange,
+  createProgressTracker,
+  DEFAULT_STUCK_DETECTION_CONFIG,
+  mapExecutionErrorToFailureReason,
+  verifyFallbackCompletion,
+} from './resultJudge';
+import {
+  extractExpectedActions,
+  validateActionAndCheckProgress,
+  askClaudeForActionCompletion,
+} from './actionValidator';
 import type {
   Scenario,
   CaptureResult,
@@ -20,6 +37,9 @@ import type {
   ActionRecord,
   AgentLoopConfig,
   ClaudeModelConfig,
+  TestResult,
+  ExpectedAction,
+  ProgressTracker,
 } from '../types';
 import { DEFAULT_AGENT_LOOP_CONFIG, DEFAULT_CLAUDE_MODEL_CONFIG } from '../types';
 
@@ -32,11 +52,14 @@ export interface AgentLoopOptions {
   config?: Partial<AgentLoopConfig>;
 }
 
-/** Result of agent loop execution */
+/** Result of agent loop execution (enhanced with TestResult) */
 export interface AgentLoopResult {
   success: boolean;
   error?: string;
   iterations: number;
+  testResult: TestResult;
+  expectedActions?: ExpectedAction[];
+  isFromFallback?: boolean;
 }
 
 /**
@@ -53,8 +76,6 @@ function mergeModelConfig(
     model: partial.model ?? DEFAULT_CLAUDE_MODEL_CONFIG.model,
     betaHeader: partial.betaHeader ?? DEFAULT_CLAUDE_MODEL_CONFIG.betaHeader,
     toolType: partial.toolType ?? DEFAULT_CLAUDE_MODEL_CONFIG.toolType,
-    // enableZoom is only supported for Opus 4.5 (computer_20251124)
-    // Ignore enableZoom for older tool versions
     enableZoom:
       (partial.toolType ?? DEFAULT_CLAUDE_MODEL_CONFIG.toolType) === 'computer_20251124'
         ? (partial.enableZoom ?? DEFAULT_CLAUDE_MODEL_CONFIG.enableZoom)
@@ -64,16 +85,15 @@ function mergeModelConfig(
 
 /**
  * Execute the agent loop for a single scenario
+ * Enhanced with test result judgment (v18)
  */
 export async function runAgentLoop(
   options: AgentLoopOptions
 ): Promise<AgentLoopResult> {
-  // Deep merge config with defaults, including modelConfig
   const baseConfig: AgentLoopConfig = {
     ...DEFAULT_AGENT_LOOP_CONFIG,
     ...options.config,
   };
-  // Ensure modelConfig is properly merged
   const config: AgentLoopConfig = {
     ...baseConfig,
     modelConfig: mergeModelConfig(options.config?.modelConfig),
@@ -84,19 +104,52 @@ export async function runAgentLoop(
   const actionHistory: ActionRecord[] = [];
   let captureResult: CaptureResult;
   let iteration = 0;
+  const startedAt = new Date();
+
+  // Expected actions and progress tracking
+  let expectedActions: ExpectedAction[] = [];
+  let isFromFallback = false;
+  let completedActionIndex = 0;
+  const completedToolUseDescriptions: string[] = [];
+  const progressTracker: ProgressTracker = createProgressTracker();
+
+  // Medium confidence tracking for Claude verification
+  let mediumConfidenceActionCount = 0;
+  const MEDIUM_CONFIDENCE_CHECK_THRESHOLD = 3;
+
+  // Low/medium confidence tracking for action_mismatch failure
+  let lowMediumConfidenceCount = 0;
+  const LOW_MEDIUM_CONFIDENCE_FAILURE_THRESHOLD = 10;
+
+  // Claude response text for context
+  let lastClaudeResponseText = '';
+
+  // Previous screenshot for screen change detection
+  let previousScreenshotBase64 = '';
 
   try {
+    // Extract expected actions from scenario
+    log('[Agent Loop] Extracting expected actions from scenario...');
+    const extractResult = await extractExpectedActions(options.scenario.description);
+    expectedActions = extractResult.expectedActions;
+    isFromFallback = extractResult.isFromFallback;
+    log(`[Agent Loop] Extracted ${expectedActions.length} expected actions (fallback: ${isFromFallback})`);
+
     // Initial screenshot
     log('[Agent Loop] Capturing initial screenshot...');
     log(`[Agent Loop] Scenario description: ${options.scenario.description}`);
     captureResult = await invoke<CaptureResult>('capture_screen');
+    previousScreenshotBase64 = captureResult.imageBase64;
 
-    // Initial message with scenario description and screenshot
+    // Initial message with scenario description, screenshot, and result schema instruction
     messages = [
       {
         role: 'user',
         content: [
-          { type: 'text', text: options.scenario.description },
+          {
+            type: 'text',
+            text: `${options.scenario.description}\n\n${RESULT_SCHEMA_INSTRUCTION}`,
+          },
           {
             type: 'image',
             source: {
@@ -113,12 +166,58 @@ export async function runAgentLoop(
     while (iteration < config.maxIterationsPerScenario) {
       // Check for abort
       if (options.abortSignal.aborted) {
-        return { success: false, error: 'Aborted', iterations: iteration };
+        return {
+          success: false,
+          error: 'Aborted',
+          iterations: iteration,
+          testResult: createTestResult({
+            status: 'stopped',
+            failureReason: 'aborted',
+            failureDetails: 'Aborted by signal',
+            completedSteps: iteration,
+            completedActionIndex,
+            startedAt,
+          }),
+          expectedActions,
+          isFromFallback,
+        };
       }
 
       const stopRequested = await invoke<boolean>('is_stop_requested');
       if (stopRequested) {
-        return { success: false, error: 'Stopped by user', iterations: iteration };
+        return {
+          success: false,
+          error: 'Stopped by user',
+          iterations: iteration,
+          testResult: createTestResult({
+            status: 'stopped',
+            failureReason: 'user_stopped',
+            failureDetails: 'Stopped by user request',
+            completedSteps: iteration,
+            completedActionIndex,
+            startedAt,
+          }),
+          expectedActions,
+          isFromFallback,
+        };
+      }
+
+      // Early success check: if all expected actions completed
+      if (expectedActions.length > 0 && completedActionIndex >= expectedActions.length) {
+        log('[Agent Loop] All expected actions completed - success');
+        return {
+          success: true,
+          iterations: iteration,
+          testResult: createTestResult({
+            status: 'success',
+            completedSteps: iteration,
+            completedActionIndex,
+            totalExpectedSteps: expectedActions.length,
+            startedAt,
+          }),
+          expectedActions,
+          isFromFallback,
+        };
       }
 
       options.onIteration?.(iteration + 1);
@@ -130,13 +229,94 @@ export async function runAgentLoop(
 
       // Handle null response (aborted)
       if (!response) {
-        return { success: false, error: 'API call aborted', iterations: iteration };
+        return {
+          success: false,
+          error: 'API call aborted',
+          iterations: iteration,
+          testResult: createTestResult({
+            status: 'error',
+            failureReason: 'api_error',
+            failureDetails: 'API call was aborted',
+            completedSteps: iteration,
+            completedActionIndex,
+            startedAt,
+          }),
+          expectedActions,
+          isFromFallback,
+        };
       }
 
-      // Check for completion (no tool_use)
-      if (isScenarioComplete(response)) {
-        log('[Agent Loop] Scenario completed - no more actions');
-        return { success: true, iterations: iteration + 1 };
+      // Extract Claude response text for context
+      const textBlocks = response.content.filter(
+        (block): block is BetaTextBlock => block.type === 'text'
+      );
+      lastClaudeResponseText = textBlocks.map((b) => b.text).join('\n');
+
+      // Analyze Claude response using unified judgment flow (v18)
+      // For fallback mode, we need additional confirmation
+      let additionalConfirmation = undefined;
+      if (isFromFallback && !response.content.some((block) => block.type === 'tool_use')) {
+        // Fallback mode and no tool_use - verify completion
+        additionalConfirmation = await verifyFallbackCompletion(
+          options.scenario.description,
+          captureResult.imageBase64,
+          expectedActions[0]?.keywords || [],
+          {
+            previousScreenshotBase64,
+            lastExecutedAction: completedToolUseDescriptions[completedToolUseDescriptions.length - 1],
+          }
+        );
+      }
+
+      const analyzeResult = analyzeClaudeResponse(
+        response,
+        expectedActions,
+        completedActionIndex,
+        isFromFallback,
+        additionalConfirmation
+      );
+
+      if (analyzeResult.isComplete) {
+        if (analyzeResult.isSuccess) {
+          log('[Agent Loop] Scenario completed successfully');
+          if (analyzeResult.successByProgress) {
+            log('[Agent Loop] Success determined by expected action progress');
+          }
+          return {
+            success: true,
+            iterations: iteration + 1,
+            testResult: createTestResult({
+              status: 'success',
+              completedSteps: iteration + 1,
+              completedActionIndex,
+              totalExpectedSteps: expectedActions.length || undefined,
+              claudeAnalysis: analyzeResult.analysis,
+              claudeResultOutput: analyzeResult.resultOutput,
+              startedAt,
+            }),
+            expectedActions,
+            isFromFallback,
+          };
+        } else {
+          log(`[Agent Loop] Scenario failed: ${analyzeResult.analysis}`);
+          return {
+            success: false,
+            error: `Scenario failed: ${analyzeResult.analysis}`,
+            iterations: iteration + 1,
+            testResult: createTestResult({
+              status: 'failure',
+              failureReason: analyzeResult.failureReason || 'unexpected_state',
+              failureDetails: analyzeResult.analysis,
+              completedSteps: iteration + 1,
+              completedActionIndex,
+              claudeAnalysis: analyzeResult.analysis,
+              claudeResultOutput: analyzeResult.resultOutput,
+              startedAt,
+            }),
+            expectedActions,
+            isFromFallback,
+          };
+        }
       }
 
       // Extract tool_use blocks
@@ -156,22 +336,61 @@ export async function runAgentLoop(
       for (const toolUse of toolUseBlocks) {
         // Check abort before each action
         if (options.abortSignal.aborted) {
-          return { success: false, error: 'Aborted', iterations: iteration };
+          return {
+            success: false,
+            error: 'Aborted',
+            iterations: iteration,
+            testResult: createTestResult({
+              status: 'stopped',
+              failureReason: 'aborted',
+              failureDetails: 'Aborted by signal',
+              completedSteps: iteration,
+              completedActionIndex,
+              startedAt,
+            }),
+            expectedActions,
+            isFromFallback,
+          };
         }
 
         const stopCheck = await invoke<boolean>('is_stop_requested');
         if (stopCheck) {
-          return { success: false, error: 'Stopped by user', iterations: iteration };
+          return {
+            success: false,
+            error: 'Stopped by user',
+            iterations: iteration,
+            testResult: createTestResult({
+              status: 'stopped',
+              failureReason: 'user_stopped',
+              failureDetails: 'Stopped by user request',
+              completedSteps: iteration,
+              completedActionIndex,
+              startedAt,
+            }),
+            expectedActions,
+            isFromFallback,
+          };
         }
 
         const action = toolUse.input as ComputerAction;
 
-        // Loop detection
+        // Loop detection (primary check)
         if (detectLoop(actionHistory, action, config)) {
           return {
             success: false,
             error: `Infinite loop detected: same action repeated ${config.loopDetectionThreshold} times`,
             iterations: iteration,
+            testResult: createTestResult({
+              status: 'failure',
+              failureReason: 'stuck_in_loop',
+              failureDetails: `Same action repeated ${config.loopDetectionThreshold} times (by loopDetector)`,
+              completedSteps: iteration,
+              completedActionIndex,
+              lastAction: formatActionDetails(action, captureResult.scaleFactor, captureResult.displayScaleFactor),
+              startedAt,
+            }),
+            expectedActions,
+            isFromFallback,
           };
         }
 
@@ -180,11 +399,167 @@ export async function runAgentLoop(
         log(`[Agent Loop] Executing: ${actionDetails}`);
         const actionResult = await executeAction(action, captureResult.scaleFactor, captureResult.displayScaleFactor);
 
+        // Action execution error - immediate failure
+        if (!actionResult.success) {
+          const failureReason = mapExecutionErrorToFailureReason(actionResult.error || 'Unknown error');
+          log(`[Agent Loop] Action execution failed: ${actionResult.error}`);
+
+          return {
+            success: false,
+            error: `Action execution failed: ${actionResult.error}`,
+            iterations: iteration,
+            testResult: createTestResult({
+              status: 'failure',
+              failureReason,
+              failureDetails: actionResult.error,
+              completedSteps: iteration,
+              completedActionIndex,
+              lastAction: actionDetails,
+              startedAt,
+            }),
+            expectedActions,
+            isFromFallback,
+          };
+        }
+
         // Add to action history
         actionHistory.push(createActionRecord(toolUse.id, action));
 
+        // Store previous screenshot for change detection
+        const previousScreenshotForComparison = captureResult.imageBase64;
+        previousScreenshotBase64 = captureResult.imageBase64;
+
         // Capture result screenshot
         captureResult = await invoke<CaptureResult>('capture_screen');
+
+        // Detect screen change with noise tolerance
+        const screenChangeResult = hasSignificantScreenChange(
+          previousScreenshotForComparison,
+          captureResult.imageBase64
+        );
+        const screenChanged = screenChangeResult.changed && !screenChangeResult.isNoise;
+
+        // Validate action and check progress
+        const validation = validateActionAndCheckProgress(
+          action,
+          expectedActions,
+          completedActionIndex,
+          lastClaudeResponseText,
+          screenChanged
+        );
+
+        if (validation.shouldAdvanceIndex) {
+          // High confidence match with screen change
+          if (expectedActions.length > completedActionIndex) {
+            expectedActions[completedActionIndex].completed = true;
+            log(`[Agent Loop] Expected action completed (high confidence, screen changed): ${expectedActions[completedActionIndex].description}`);
+            completedActionIndex++;
+            mediumConfidenceActionCount = 0;
+            lowMediumConfidenceCount = 0;
+          }
+        } else if (validation.confidence === 'high' && validation.requiresScreenChange && !screenChanged) {
+          // High confidence but no screen change
+          log('[Agent Loop] High confidence match but no screen change - not advancing index');
+          mediumConfidenceActionCount++;
+        } else if (validation.confidence === 'medium') {
+          // Medium confidence
+          mediumConfidenceActionCount++;
+
+          // Check for Claude verification
+          if (
+            mediumConfidenceActionCount >= MEDIUM_CONFIDENCE_CHECK_THRESHOLD &&
+            completedActionIndex < expectedActions.length &&
+            validation.needsClaudeVerification
+          ) {
+            log(`[Agent Loop] Medium confidence actions accumulated (${mediumConfidenceActionCount}) - requesting Claude verification`);
+
+            // Include current action in descriptions for Claude verification
+            const descriptionsWithCurrent = [...completedToolUseDescriptions, actionDetails];
+
+            const completionCheck = await askClaudeForActionCompletion(
+              options.scenario.description,
+              expectedActions[completedActionIndex],
+              descriptionsWithCurrent,
+              captureResult.imageBase64
+            );
+
+            if (completionCheck.isCompleted && screenChanged) {
+              expectedActions[completedActionIndex].completed = true;
+              log(`[Agent Loop] Expected action completed (Claude verified, screen changed): ${expectedActions[completedActionIndex].description}`);
+              completedActionIndex++;
+              mediumConfidenceActionCount = 0;
+              lowMediumConfidenceCount = 0;
+            } else if (completionCheck.isCompleted && !screenChanged) {
+              log('[Agent Loop] Claude verified completion but no screen change - not advancing index');
+            }
+          }
+
+          // Track low/medium confidence for action_mismatch detection
+          if (validation.requiresScreenChange && !screenChanged) {
+            lowMediumConfidenceCount++;
+          }
+        } else if (validation.confidence === 'low') {
+          // Track low/medium confidence for action_mismatch detection
+          if (validation.requiresScreenChange && !screenChanged) {
+            lowMediumConfidenceCount++;
+          }
+        }
+
+        // Check for action_mismatch failure
+        if (lowMediumConfidenceCount >= LOW_MEDIUM_CONFIDENCE_FAILURE_THRESHOLD) {
+          log(`[Agent Loop] Low/medium confidence actions without progress: ${lowMediumConfidenceCount} - action mismatch failure`);
+          return {
+            success: false,
+            error: 'Expected actions not matching - possible mismatch',
+            iterations: iteration,
+            testResult: createTestResult({
+              status: 'failure',
+              failureReason: 'action_mismatch',
+              failureDetails: `${lowMediumConfidenceCount} consecutive low/medium confidence actions without screen change`,
+              completedSteps: iteration,
+              completedActionIndex,
+              lastAction: actionDetails,
+              startedAt,
+            }),
+            expectedActions,
+            isFromFallback,
+          };
+        }
+
+        // Record completed tool use
+        completedToolUseDescriptions.push(actionDetails);
+
+        // Progress check (supplementary stuck detection)
+        const progressCheck = checkProgress(
+          progressTracker,
+          captureResult.imageBase64,
+          action,
+          {
+            maxUnchangedScreenshots: config.maxUnchangedScreenshots ?? DEFAULT_STUCK_DETECTION_CONFIG.maxUnchangedScreenshots,
+            maxSameActionRepeats: config.maxSameActionRepeats ?? DEFAULT_STUCK_DETECTION_CONFIG.maxSameActionRepeats,
+          }
+        );
+
+        if (progressCheck.isStuck) {
+          log(`[Agent Loop] Stuck detected: ${progressCheck.details}`);
+
+          return {
+            success: false,
+            error: `Stuck: ${progressCheck.details}`,
+            iterations: iteration,
+            testResult: createTestResult({
+              status: 'failure',
+              failureReason: progressCheck.reason || 'action_no_effect',
+              failureDetails: `${progressCheck.details} (by checkProgress)`,
+              completedSteps: iteration,
+              completedActionIndex,
+              lastAction: actionDetails,
+              startedAt,
+            }),
+            expectedActions,
+            isFromFallback,
+          };
+        }
 
         // Build tool result
         toolResults.push({
@@ -193,9 +568,7 @@ export async function runAgentLoop(
           content: [
             {
               type: 'text',
-              text: actionResult.success
-                ? 'Action executed successfully'
-                : `Action failed: ${actionResult.error}`,
+              text: 'Action executed successfully',
             },
             {
               type: 'image',
@@ -229,11 +602,35 @@ export async function runAgentLoop(
       success: false,
       error: `Max iterations (${config.maxIterationsPerScenario}) reached`,
       iterations: iteration,
+      testResult: createTestResult({
+        status: 'timeout',
+        failureReason: 'max_iterations',
+        failureDetails: `Maximum iterations (${config.maxIterationsPerScenario}) reached without completion`,
+        completedSteps: iteration,
+        completedActionIndex,
+        startedAt,
+      }),
+      expectedActions,
+      isFromFallback,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     log(`[Agent Loop] Error: ${errorMessage}`);
-    return { success: false, error: errorMessage, iterations: iteration };
+    return {
+      success: false,
+      error: errorMessage,
+      iterations: iteration,
+      testResult: createTestResult({
+        status: 'error',
+        failureReason: 'action_execution_error',
+        failureDetails: errorMessage,
+        completedSteps: iteration,
+        completedActionIndex,
+        startedAt,
+      }),
+      expectedActions,
+      isFromFallback,
+    };
   }
 }
 
@@ -248,27 +645,23 @@ function formatActionDetails(
 ): string {
   const parts: string[] = [action.action];
 
-  // Add coordinate info with conversion (includes HiDPI/Retina adjustment)
   if (action.coordinate) {
     const [claudeX, claudeY] = action.coordinate;
     const screenCoord = toScreenCoordinate({ x: claudeX, y: claudeY }, scaleFactor, displayScaleFactor);
     parts.push(`at Claude(${claudeX}, ${claudeY}) → Screen(${screenCoord.x}, ${screenCoord.y}) [DPI:${displayScaleFactor}]`);
   }
 
-  // Add start coordinate for drag actions
   if (action.start_coordinate) {
     const [startX, startY] = action.start_coordinate;
     const screenStart = toScreenCoordinate({ x: startX, y: startY }, scaleFactor, displayScaleFactor);
     parts.push(`from Claude(${startX}, ${startY}) → Screen(${screenStart.x}, ${screenStart.y})`);
   }
 
-  // Add text for type/key actions
   if (action.text) {
     const displayText = action.text.length > 50 ? action.text.substring(0, 50) + '...' : action.text;
     parts.push(`text="${displayText}"`);
   }
 
-  // Add scroll info
   if (action.scroll_direction) {
     parts.push(`direction=${action.scroll_direction}`);
     if (action.scroll_amount) {
@@ -276,24 +669,15 @@ function formatActionDetails(
     }
   }
 
-  // Add duration for wait
   if (action.duration !== undefined) {
     parts.push(`duration=${action.duration}ms`);
   }
 
-  // Add key info for hold_key
   if (action.key) {
     parts.push(`key="${action.key}" ${action.down ? 'down' : 'up'}`);
   }
 
   return parts.join(' ');
-}
-
-/**
- * Check if scenario is complete (no tool_use blocks)
- */
-function isScenarioComplete(response: BetaMessage): boolean {
-  return !response.content.some((block) => block.type === 'tool_use');
 }
 
 /**
@@ -306,24 +690,20 @@ async function callClaudeAPI(
   abortSignal: AbortSignal,
   modelConfig: ClaudeModelConfig
 ): Promise<BetaMessage | null> {
-  // Define abort handler for cleanup
   let abortHandler: (() => void) | null = null;
 
   try {
     const client = await getClaudeClient();
 
-    // Build computer tool with model configuration
-    // Note: Using type assertion as SDK may not have latest type definitions (computer_20251124)
-    // This is intentional and should be updated when SDK supports the new tool version
     const apiPromise = client.beta.messages.create({
       model: modelConfig.model,
       max_tokens: 4096,
+      system: RESULT_SCHEMA_INSTRUCTION,
       tools: [buildComputerTool(captureResult, modelConfig)] as unknown as Parameters<typeof client.beta.messages.create>[0]['tools'],
       messages,
       betas: [modelConfig.betaHeader],
     });
 
-    // Create abort promise with proper cleanup
     const abortPromise = new Promise<never>((_, reject) => {
       if (abortSignal.aborted) {
         reject(new DOMException('Aborted', 'AbortError'));
@@ -333,7 +713,6 @@ async function callClaudeAPI(
       abortSignal.addEventListener('abort', abortHandler);
     });
 
-    // Race between API call and abort
     const result = await Promise.race([apiPromise, abortPromise]);
     return result as BetaMessage;
   } catch (error) {
@@ -342,7 +721,6 @@ async function callClaudeAPI(
     }
     throw error;
   } finally {
-    // Clean up abort listener to prevent memory leaks
     if (abortHandler) {
       abortSignal.removeEventListener('abort', abortHandler);
     }
@@ -379,7 +757,6 @@ async function executeAction(
 
     switch (action.action) {
       case 'screenshot':
-        // No action needed, screenshot is taken after this
         break;
 
       case 'left_click':

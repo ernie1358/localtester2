@@ -79,6 +79,10 @@ export interface AgentLoopConfig {
   loopDetectionThreshold: number;
   /** Claude model configuration */
   modelConfig?: ClaudeModelConfig;
+  /** Maximum same action repeats before stuck detection */
+  maxSameActionRepeats?: number;
+  /** Maximum unchanged screenshots before stuck detection */
+  maxUnchangedScreenshots?: number;
 }
 
 /** Default agent loop configuration */
@@ -87,4 +91,6 @@ export const DEFAULT_AGENT_LOOP_CONFIG: AgentLoopConfig = {
   loopDetectionWindow: 5,
   loopDetectionThreshold: 3,
   modelConfig: DEFAULT_CLAUDE_MODEL_CONFIG,
+  maxSameActionRepeats: 5,
+  maxUnchangedScreenshots: 3,
 };

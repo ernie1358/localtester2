@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { runAgentLoop, type AgentLoopResult } from './agentLoop';
 import type { Scenario, ScenarioRunnerState, AgentLoopConfig } from '../types';
+import { mapTestResultStatusToScenarioStatus } from '../types';
 
 /** Options for scenario runner */
 export interface ScenarioRunnerOptions {
@@ -132,13 +133,18 @@ export class ScenarioRunner {
         config: options.agentConfig,
       });
 
-      scenario.status = result.success ? 'completed' : 'failed';
-      scenario.error = result.error;
+      // Store TestResult and expectedActions in Scenario
+      scenario.result = result.testResult;
+      scenario.expectedActions = result.expectedActions;
+      // Use mapTestResultStatusToScenarioStatus for consistent status mapping
+      scenario.status = mapTestResultStatusToScenarioStatus(result.testResult.status);
+      scenario.error = result.testResult.failureDetails;
       scenario.iterations = result.iterations;
       scenario.completedAt = new Date();
 
+      const statusEmoji = result.testResult.status === 'success' ? '✓' : '✗';
       this.log(
-        `[Scenario Runner] Scenario ${result.success ? 'completed' : 'failed'}: ${scenario.title}`
+        `[Scenario Runner] ${statusEmoji} Scenario ${result.testResult.status}: ${scenario.title} - ${result.testResult.claudeAnalysis || result.testResult.failureDetails || ''}`
       );
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
