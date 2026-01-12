@@ -8,6 +8,10 @@ import {
   MAX_TOTAL_SIZE,
 } from '../constants/hintImages';
 
+// UI display constants for explaining API limits (not enforced at save time)
+const UI_MAX_FILE_SIZE_MB = Math.round(MAX_FILE_SIZE / 1024 / 1024);
+const UI_MAX_TOTAL_SIZE_MB = Math.round(MAX_TOTAL_SIZE / 1024 / 1024);
+
 const props = defineProps<{
   scenario?: StoredScenario | null;
   visible: boolean;
@@ -146,17 +150,6 @@ function normalizeMimeType(mimeType: string): string {
   return mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
 }
 
-// Validate image file
-function validateImageFile(file: File): string | null {
-  if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(file.type)) {
-    return `${file.name}: サポートされていない形式です（PNG, JPG, GIF, WebPのみ）`;
-  }
-  if (file.size > MAX_FILE_SIZE) {
-    return `${file.name}: ファイルサイズが5MBを超えています`;
-  }
-  return null;
-}
-
 // Convert File to Base64
 async function fileToBase64(
   file: File
@@ -176,47 +169,31 @@ async function fileToBase64(
 }
 
 // Process files (from drop or file input)
+// NOTE: No count/total size limits at save time - all images are saved.
+// API constraints are applied at send time (trimHintImagesToLimit in scenarioRunner.ts)
 async function processFiles(files: FileList | File[]) {
   imageError.value = '';
   imageLimitWarning.value = '';
+  const warnings: string[] = [];
   const errors: string[] = [];
   isProcessingImages.value = true;
 
   try {
     const fileArray = Array.from(files);
-
-    // Check if adding these files would exceed the count limit
-    const currentCount = visibleImages.value.length;
-    if (currentCount >= MAX_IMAGE_COUNT) {
-      imageError.value = `画像は最大${MAX_IMAGE_COUNT}枚までです`;
-      return;
-    }
-
-    const availableSlots = MAX_IMAGE_COUNT - currentCount;
     let addedCount = 0;
-    let skippedDueToLimit = 0;
 
-    // Process all files, but only add valid ones up to the available slots
+    // Process all files - save is unlimited, API limits apply at send time
     for (const file of fileArray) {
-      // Stop if we've reached the limit
-      if (addedCount >= availableSlots) {
-        skippedDueToLimit++;
+      // Validate MIME type - reject unsupported formats
+      if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(file.type)) {
+        errors.push(`${file.name}: サポートされていない形式です（PNG, JPG, GIF, WebPのみ）`);
         continue;
       }
 
-      const validationError = validateImageFile(file);
-      if (validationError) {
-        errors.push(validationError);
-        continue;
-      }
-
-      // Check total size before adding (reserving space for screenshots in API requests)
-      const currentTotalSize = calculateTotalImageSize();
-      if (currentTotalSize + file.size > MAX_TOTAL_SIZE) {
-        errors.push(
-          `${file.name}: 追加するとヒント画像の総容量が${Math.round(MAX_TOTAL_SIZE / 1024 / 1024)}MBを超えます（API制限のため）`
-        );
-        continue;
+      // Warn about large files but still allow them (they will be excluded at send time)
+      if (file.size > MAX_FILE_SIZE) {
+        const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+        warnings.push(`${file.name}: ${sizeMB}MBは送信時に除外される可能性があります（1枚${UI_MAX_FILE_SIZE_MB}MB以下推奨）`);
       }
 
       try {
@@ -233,11 +210,27 @@ async function processFiles(files: FileList | File[]) {
       }
     }
 
-    // Show warning if some valid files were skipped due to limit
-    if (skippedDueToLimit > 0) {
-      imageLimitWarning.value = `${fileArray.length}枚中${addedCount}枚のみ追加しました（上限: ${MAX_IMAGE_COUNT}枚）`;
+    // Show warning if limits will be exceeded at send time
+    const totalCount = visibleImages.value.length;
+    const totalSize = calculateTotalImageSize();
+
+    if (totalCount > MAX_IMAGE_COUNT || totalSize > MAX_TOTAL_SIZE) {
+      const limitWarnings: string[] = [];
+      if (totalCount > MAX_IMAGE_COUNT) {
+        limitWarnings.push(`${MAX_IMAGE_COUNT}枚`);
+      }
+      if (totalSize > MAX_TOTAL_SIZE) {
+        limitWarnings.push(`${UI_MAX_TOTAL_SIZE_MB}MB`);
+      }
+      warnings.push(`※ API制限（${limitWarnings.join('・')}まで）を超えています。送信時に一部の画像が除外されます。`);
     }
 
+    // Show warnings (non-blocking)
+    if (warnings.length > 0) {
+      imageLimitWarning.value = warnings.join('\n');
+    }
+
+    // Show errors (blocking for those files only)
     if (errors.length > 0) {
       imageError.value = errors.join('\n');
     }
@@ -371,7 +364,7 @@ function handleCancel() {
         <label>ヒント画像 <span class="optional-label">（省略可）</span></label>
         <p class="hint-text image-hint">
           クリック対象や探してほしい要素のスクリーンショットをドラッグ&ドロップで追加できます<br />
-          <span class="limit-text">（最大{{ MAX_IMAGE_COUNT }}枚、1枚{{ Math.round(MAX_FILE_SIZE / 1024 / 1024) }}MB以下、合計{{ Math.round(MAX_TOTAL_SIZE / 1024 / 1024) }}MB以下）</span>
+          <span class="limit-text">※ 保存は無制限、送信時はAPI制限（{{ MAX_IMAGE_COUNT }}枚・{{ UI_MAX_TOTAL_SIZE_MB }}MBまで）に合わせて自動選別されます</span>
         </p>
         <div
           class="drop-zone"

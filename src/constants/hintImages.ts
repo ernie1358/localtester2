@@ -29,12 +29,14 @@ export const MAX_FILE_SIZE = 5 * 1024 * 1024;
 export const MAX_IMAGE_COUNT = 20;
 
 /**
- * Maximum total size for all hint images in bytes (15MB)
+ * Maximum total size for all hint images in bytes (11MB raw, ~14.7MB after base64)
  * Claude API has 32MB request limit; reserving space for:
+ * - Base64 encoding overhead (+33%): 11MB → ~14.7MB
  * - Screenshots during computer use (~10MB buffer)
  * - Request metadata and other content (~7MB buffer)
+ * Total: ~14.7MB + ~10MB + ~7MB ≈ 32MB
  */
-export const MAX_TOTAL_SIZE = 15 * 1024 * 1024;
+export const MAX_TOTAL_SIZE = 11 * 1024 * 1024;
 
 /**
  * Validates hint images against API constraints

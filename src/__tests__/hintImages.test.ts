@@ -12,7 +12,7 @@ describe('hintImages constants', () => {
   it('should have correct constant values', () => {
     expect(MAX_FILE_SIZE).toBe(5 * 1024 * 1024); // 5MB
     expect(MAX_IMAGE_COUNT).toBe(20);
-    expect(MAX_TOTAL_SIZE).toBe(15 * 1024 * 1024); // 15MB
+    expect(MAX_TOTAL_SIZE).toBe(11 * 1024 * 1024); // 11MB (considering base64 overhead)
     expect(ALLOWED_MIME_TYPES).toContain('image/png');
     expect(ALLOWED_MIME_TYPES).toContain('image/jpeg');
     expect(ALLOWED_MIME_TYPES).toContain('image/gif');
@@ -53,15 +53,15 @@ describe('validateHintImages', () => {
   });
 
   it('should return error when total size exceeds MAX_TOTAL_SIZE', () => {
-    // Create images that individually are within 5MB limit but together exceed 15MB total
-    // Use ~4MB per image (under 5MB limit) × 5 = 20MB total (exceeds 15MB)
+    // Create images that individually are within 5MB limit but together exceed 11MB total
+    // Use ~4MB per image (under 5MB limit) × 4 = 16MB total (exceeds 11MB)
     const base64For4MB = Math.ceil((4 * 1024 * 1024) / 0.75);
-    const images = Array(5)
+    const images = Array(4)
       .fill(null)
-      .map(() => createMockImage(base64For4MB)); // 5 images × 4MB = 20MB > 15MB
+      .map(() => createMockImage(base64For4MB)); // 4 images × 4MB = 16MB > 11MB
     const result = validateHintImages(images);
     expect(result.valid).toBe(false);
-    expect(result.error).toContain('15MBを超えています');
+    expect(result.error).toContain('11MBを超えています');
   });
 
   it('should return valid at exactly MAX_IMAGE_COUNT', () => {
@@ -139,13 +139,13 @@ describe('trimHintImagesToLimit', () => {
   });
 
   it('should trim images exceeding MAX_TOTAL_SIZE', () => {
-    // Create 10 images of ~2MB each (total ~20MB > 15MB limit)
+    // Create 10 images of ~2MB each (total ~20MB > 11MB limit)
     const base64For2MB = Math.ceil((2 * 1024 * 1024) / 0.75);
     const images = Array(10)
       .fill(null)
       .map(() => createMockImage(base64For2MB));
     const { trimmed, removedCount } = trimHintImagesToLimit(images);
-    // Should trim to fit within 15MB
+    // Should trim to fit within 11MB
     expect(trimmed.length).toBeLessThan(10);
     expect(removedCount).toBeGreaterThan(0);
 
@@ -165,7 +165,7 @@ describe('trimHintImagesToLimit', () => {
       .map(() => createMockImage(base64For1MB));
     const { trimmed, removedCount } = trimHintImagesToLimit(images);
 
-    // First trimmed to 20, then further trimmed to fit 15MB
+    // First trimmed to 20, then further trimmed to fit 11MB
     expect(trimmed.length).toBeLessThanOrEqual(20);
     expect(removedCount).toBeGreaterThanOrEqual(5);
 

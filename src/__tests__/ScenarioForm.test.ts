@@ -195,64 +195,7 @@ describe('ScenarioForm Component', () => {
       expect(errorText.text()).toContain('サポートされていない形式');
     });
 
-    it('should show error for file exceeding 5MB', async () => {
-      const wrapper = mount(ScenarioForm, {
-        props: {
-          visible: true,
-          scenario: null,
-        },
-      });
-
-      // Create a file larger than 5MB (5 * 1024 * 1024 bytes)
-      const largeFile = createMockFile('large.png', 6 * 1024 * 1024, 'image/png');
-      const dropZone = wrapper.find('.drop-zone');
-
-      await dropZone.trigger('drop', {
-        dataTransfer: createMockDataTransfer([largeFile]),
-      });
-      await flushPromises();
-
-      const errorText = wrapper.find('.error-text');
-      expect(errorText.exists()).toBe(true);
-      expect(errorText.text()).toContain('5MBを超えています');
-    });
-  });
-
-  describe('Image Count Limit', () => {
-    it('should show error when trying to add more than 20 images', async () => {
-      const existingImages: StepImage[] = Array(20)
-        .fill(null)
-        .map((_, i) =>
-          createMockStepImage({
-            id: `img-${i}`,
-            file_name: `image${i}.png`,
-          })
-        );
-
-      const wrapper = mount(ScenarioForm, {
-        props: {
-          visible: true,
-          scenario: null,
-          existingImages,
-        },
-      });
-
-      await flushPromises();
-
-      const mockFile = createMockFile('new.png', 100, 'image/png');
-      const dropZone = wrapper.find('.drop-zone');
-
-      await dropZone.trigger('drop', {
-        dataTransfer: createMockDataTransfer([mockFile]),
-      });
-      await flushPromises();
-
-      const errorText = wrapper.find('.error-text');
-      expect(errorText.exists()).toBe(true);
-      expect(errorText.text()).toContain('最大20枚まで');
-    });
-
-    it('should show warning when partially adding images due to limit', async () => {
+    it('should show warning for file exceeding 5MB but still allow save', async () => {
       // Mock FileReader to be synchronous for testing
       const originalFileReader = globalThis.FileReader;
       class MockFileReader {
@@ -261,7 +204,122 @@ describe('ScenarioForm Component', () => {
         result: string | null = null;
 
         readAsDataURL(_file: File) {
-          // Synchronously set result and call onload
+          this.result = 'data:image/png;base64,testdata';
+          Promise.resolve().then(() => {
+            if (this.onload) {
+              this.onload({ target: this } as unknown as ProgressEvent<FileReader>);
+            }
+          });
+        }
+      }
+      globalThis.FileReader = MockFileReader as unknown as typeof FileReader;
+
+      try {
+        const wrapper = mount(ScenarioForm, {
+          props: {
+            visible: true,
+            scenario: null,
+          },
+        });
+
+        // Create a file larger than 5MB (5 * 1024 * 1024 bytes)
+        const largeFile = createMockFile('large.png', 6 * 1024 * 1024, 'image/png');
+        const dropZone = wrapper.find('.drop-zone');
+
+        await dropZone.trigger('drop', {
+          dataTransfer: createMockDataTransfer([largeFile]),
+        });
+        await flushPromises();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        await flushPromises();
+
+        // Should show warning (not error) - file is still added
+        const warningText = wrapper.find('.warning-text');
+        expect(warningText.exists()).toBe(true);
+        expect(warningText.text()).toContain('送信時に除外される可能性');
+
+        // Image should still be added (save is unlimited)
+        const previews = wrapper.findAll('.image-preview');
+        expect(previews.length).toBe(1);
+      } finally {
+        globalThis.FileReader = originalFileReader;
+      }
+    });
+  });
+
+  describe('Image Count Limit - Save is Unlimited', () => {
+    it('should allow adding more than 20 images but show warning', async () => {
+      // Mock FileReader to be synchronous for testing
+      const originalFileReader = globalThis.FileReader;
+      class MockFileReader {
+        onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+        onerror: (() => void) | null = null;
+        result: string | null = null;
+
+        readAsDataURL(_file: File) {
+          this.result = 'data:image/png;base64,testdata';
+          Promise.resolve().then(() => {
+            if (this.onload) {
+              this.onload({ target: this } as unknown as ProgressEvent<FileReader>);
+            }
+          });
+        }
+      }
+      globalThis.FileReader = MockFileReader as unknown as typeof FileReader;
+
+      try {
+        const existingImages: StepImage[] = Array(20)
+          .fill(null)
+          .map((_, i) =>
+            createMockStepImage({
+              id: `img-${i}`,
+              file_name: `image${i}.png`,
+            })
+          );
+
+        const wrapper = mount(ScenarioForm, {
+          props: {
+            visible: true,
+            scenario: null,
+            existingImages,
+          },
+        });
+
+        await flushPromises();
+
+        const mockFile = createMockFile('new.png', 100, 'image/png');
+        const dropZone = wrapper.find('.drop-zone');
+
+        await dropZone.trigger('drop', {
+          dataTransfer: createMockDataTransfer([mockFile]),
+        });
+        await flushPromises();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        await flushPromises();
+
+        // Should show warning about API limit, not error
+        const warningText = wrapper.find('.warning-text');
+        expect(warningText.exists()).toBe(true);
+        expect(warningText.text()).toContain('API制限');
+        expect(warningText.text()).toContain('20枚');
+
+        // Image should still be added (save is unlimited, API limit at send time)
+        const previews = wrapper.findAll('.image-preview');
+        expect(previews.length).toBe(21);
+      } finally {
+        globalThis.FileReader = originalFileReader;
+      }
+    });
+
+    it('should add all images without warning when under limit', async () => {
+      // Mock FileReader to be synchronous for testing
+      const originalFileReader = globalThis.FileReader;
+      class MockFileReader {
+        onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+        onerror: (() => void) | null = null;
+        result: string | null = null;
+
+        readAsDataURL(_file: File) {
           this.result = 'data:image/png;base64,testdata';
           Promise.resolve().then(() => {
             if (this.onload) {
@@ -293,8 +351,8 @@ describe('ScenarioForm Component', () => {
 
         await flushPromises();
 
-        // Try to add 5 valid images when only 2 slots are available
-        const mockFiles = Array(5)
+        // Add 2 valid images (still within 20 limit)
+        const mockFiles = Array(2)
           .fill(null)
           .map((_, i) => createMockFile(`new${i}.png`, 100, 'image/png'));
 
@@ -309,9 +367,13 @@ describe('ScenarioForm Component', () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
         await flushPromises();
 
+        // No warning when under limit
         const warningText = wrapper.find('.warning-text');
-        expect(warningText.exists()).toBe(true);
-        expect(warningText.text()).toContain('5枚中2枚のみ追加しました');
+        expect(warningText.exists()).toBe(false);
+
+        // All images added
+        const previews = wrapper.findAll('.image-preview');
+        expect(previews.length).toBe(20);
       } finally {
         globalThis.FileReader = originalFileReader;
       }
@@ -480,48 +542,82 @@ describe('ScenarioForm Component', () => {
     });
   });
 
-  describe('Total Size Limit', () => {
-    it('should show error when total size exceeds 15MB', async () => {
-      // Start with existing images that are close to the 15MB limit
-      // Use 4 images of ~3MB each (12MB total)
-      const existingImages: StepImage[] = Array(4)
-        .fill(null)
-        .map((_, i) =>
-          createMockStepImage({
-            id: `img-${i}`,
-            file_name: `large${i}.png`,
-            // 3MB worth of base64 data (~4MB in base64)
-            image_data: 'a'.repeat(Math.floor((3 * 1024 * 1024) / 0.75)),
-          })
-        );
+  describe('Total Size Limit - Save is Unlimited', () => {
+    it('should allow adding images exceeding 11MB total but show warning', async () => {
+      // Mock FileReader to return a large base64 string (simulating a 3MB file)
+      const originalFileReader = globalThis.FileReader;
+      // 3MB in base64 format (3MB * 1.33 ≈ 4MB base64 string)
+      const largeBase64 = 'a'.repeat(Math.floor((3 * 1024 * 1024) / 0.75));
 
-      const wrapper = mount(ScenarioForm, {
-        props: {
-          visible: true,
-          scenario: null,
-          existingImages,
-        },
-      });
+      class MockFileReader {
+        onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+        onerror: (() => void) | null = null;
+        result: string | null = null;
 
-      await flushPromises();
+        readAsDataURL(_file: File) {
+          // Return a large base64 to simulate a 3MB file
+          this.result = `data:image/png;base64,${largeBase64}`;
+          Promise.resolve().then(() => {
+            if (this.onload) {
+              this.onload({ target: this } as unknown as ProgressEvent<FileReader>);
+            }
+          });
+        }
+      }
+      globalThis.FileReader = MockFileReader as unknown as typeof FileReader;
 
-      // Try to add a 5MB file (would exceed 15MB total)
-      const largeFile = createMockFile('extra.png', 5 * 1024 * 1024, 'image/png');
-      const dropZone = wrapper.find('.drop-zone');
+      try {
+        // Start with existing images that are close to the 11MB limit
+        // Use 3 images of ~3MB each (9MB total)
+        const existingImages: StepImage[] = Array(3)
+          .fill(null)
+          .map((_, i) =>
+            createMockStepImage({
+              id: `img-${i}`,
+              file_name: `large${i}.png`,
+              // 3MB worth of base64 data (~4MB in base64)
+              image_data: largeBase64,
+            })
+          );
 
-      await dropZone.trigger('drop', {
-        dataTransfer: createMockDataTransfer([largeFile]),
-      });
-      await flushPromises();
+        const wrapper = mount(ScenarioForm, {
+          props: {
+            visible: true,
+            scenario: null,
+            existingImages,
+          },
+        });
 
-      const errorText = wrapper.find('.error-text');
-      expect(errorText.exists()).toBe(true);
-      expect(errorText.text()).toContain('総容量が15MBを超えます');
+        await flushPromises();
+
+        // Try to add a file that would bring total to 12MB (exceeds 11MB limit)
+        const largeFile = createMockFile('extra.png', 3 * 1024 * 1024, 'image/png');
+        const dropZone = wrapper.find('.drop-zone');
+
+        await dropZone.trigger('drop', {
+          dataTransfer: createMockDataTransfer([largeFile]),
+        });
+        await flushPromises();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        await flushPromises();
+
+        // Should show warning about API limit being exceeded
+        const warningText = wrapper.find('.warning-text');
+        expect(warningText.exists()).toBe(true);
+        expect(warningText.text()).toContain('API制限');
+        expect(warningText.text()).toContain('11MB');
+
+        // Image should still be added (save is unlimited, API limit at send time)
+        const previews = wrapper.findAll('.image-preview');
+        expect(previews.length).toBe(4);
+      } finally {
+        globalThis.FileReader = originalFileReader;
+      }
     });
   });
 
-  describe('Invalid Files Mixed with Valid Files', () => {
-    it('should skip invalid files and add valid files up to the limit', async () => {
+  describe('Invalid Files Mixed with Valid Files - Save is Unlimited', () => {
+    it('should skip invalid MIME types but add all valid files', async () => {
       // Mock FileReader to be synchronous for testing
       const originalFileReader = globalThis.FileReader;
       class MockFileReader {
@@ -530,7 +626,6 @@ describe('ScenarioForm Component', () => {
         result: string | null = null;
 
         readAsDataURL(_file: File) {
-          // Synchronously set result and call onload
           this.result = 'data:image/png;base64,testdata';
           Promise.resolve().then(() => {
             if (this.onload) {
@@ -542,7 +637,7 @@ describe('ScenarioForm Component', () => {
       globalThis.FileReader = MockFileReader as unknown as typeof FileReader;
 
       try {
-        // Start with 18 existing images (MAX_IMAGE_COUNT=20, so 2 slots left)
+        // Start with 18 existing images
         const existingImages: StepImage[] = Array(18)
           .fill(null)
           .map((_, i) =>
@@ -562,10 +657,8 @@ describe('ScenarioForm Component', () => {
 
         await flushPromises();
 
-        // Drop 5 files: 2 invalid (text files) at the start, then 3 valid
-        // With 18 existing, we have 2 slots available
-        // Old behavior: slice(0, 2) would take the 2 text files, both invalid, add 0 images
-        // New behavior: skip invalid, add valid ones up to limit (2)
+        // Drop 5 files: 2 invalid (text files), then 3 valid
+        // Save is unlimited, so all 3 valid files should be added (total: 21)
         const mockFiles = [
           createMockFile('invalid1.txt', 100, 'text/plain'),
           createMockFile('invalid2.txt', 100, 'text/plain'),
@@ -585,25 +678,25 @@ describe('ScenarioForm Component', () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
         await flushPromises();
 
-        // Should have added 2 valid images (slots available)
+        // Should have added all 3 valid images (save is unlimited)
         const previews = wrapper.findAll('.image-preview');
-        expect(previews.length).toBe(20); // 18 existing + 2 new valid
+        expect(previews.length).toBe(21); // 18 existing + 3 new valid
 
         // Should show error for invalid files
         const errorText = wrapper.find('.error-text');
         expect(errorText.exists()).toBe(true);
         expect(errorText.text()).toContain('サポートされていない形式');
 
-        // Should show warning for skipped file due to limit
+        // Should show warning about API limit being exceeded
         const warningText = wrapper.find('.warning-text');
         expect(warningText.exists()).toBe(true);
-        expect(warningText.text()).toContain('5枚中2枚のみ追加しました');
+        expect(warningText.text()).toContain('API制限');
       } finally {
         globalThis.FileReader = originalFileReader;
       }
     });
 
-    it('should add all valid files when no limit reached', async () => {
+    it('should add all valid files when no limit warning needed', async () => {
       // Mock FileReader to be synchronous for testing
       const originalFileReader = globalThis.FileReader;
       class MockFileReader {
@@ -612,7 +705,6 @@ describe('ScenarioForm Component', () => {
         result: string | null = null;
 
         readAsDataURL(_file: File) {
-          // Synchronously set result and call onload
           this.result = 'data:image/png;base64,testdata';
           Promise.resolve().then(() => {
             if (this.onload) {
@@ -661,7 +753,7 @@ describe('ScenarioForm Component', () => {
         expect(errorText.exists()).toBe(true);
         expect(errorText.text()).toContain('サポートされていない形式');
 
-        // Should NOT show warning (no files skipped due to limit)
+        // Should NOT show warning (under API limit)
         const warningText = wrapper.find('.warning-text');
         expect(warningText.exists()).toBe(false);
       } finally {
