@@ -10,10 +10,13 @@ import {
   updateScenario,
   deleteScenario,
   updateScenarioOrders,
+  getStepImages,
+  addStepImage,
+  deleteStepImage,
 } from './services/scenarioDatabase';
 import { runSelectedScenarios, scenarioRunner } from './services/scenarioRunner';
 import { openResultWindow } from './services/resultWindowService';
-import type { StoredScenario, PermissionStatus } from './types';
+import type { StoredScenario, PermissionStatus, StepImage, FormImageData } from './types';
 
 // State
 const scenarios = ref<StoredScenario[]>([]);
@@ -24,6 +27,7 @@ const logs = ref<string[]>([]);
 // Modal state
 const showScenarioForm = ref(false);
 const editingScenario = ref<StoredScenario | null>(null);
+const editingScenarioImages = ref<StepImage[]>([]);
 const showDeleteConfirm = ref(false);
 const deletingScenario = ref<StoredScenario | null>(null);
 
@@ -70,7 +74,7 @@ async function loadScenarios() {
   } catch (error) {
     console.error('Failed to load scenarios:', error);
     addLog(
-      `シナリオ読み込みエラー: ${error instanceof Error ? error.message : String(error)}`
+      `テストステップ読み込みエラー: ${error instanceof Error ? error.message : String(error)}`
     );
   }
 }
@@ -88,26 +92,54 @@ async function requestPermissions() {
 // Scenario CRUD
 function openNewScenarioForm() {
   editingScenario.value = null;
+  editingScenarioImages.value = [];
   showScenarioForm.value = true;
 }
 
-function openEditForm(scenario: StoredScenario) {
+async function openEditForm(scenario: StoredScenario) {
   editingScenario.value = scenario;
+  // Load existing images for this scenario
+  editingScenarioImages.value = await getStepImages(scenario.id);
   showScenarioForm.value = true;
 }
 
-async function handleSaveScenario(title: string, description: string) {
+async function handleSaveScenario(
+  title: string,
+  description: string,
+  images: FormImageData[]
+) {
   try {
+    let scenarioId: string;
+
+    // 1. Save scenario (new/update)
     if (editingScenario.value) {
-      await updateScenario(editingScenario.value.id, title, description);
-      addLog(`シナリオを更新しました: ${title}`);
+      // Update existing scenario
+      scenarioId = editingScenario.value.id;
+      await updateScenario(scenarioId, title, description);
+      addLog(`テストステップを更新しました: ${title}`);
     } else {
-      await createScenario(title, description);
-      addLog(`シナリオを登録しました: ${title}`);
+      // Create new scenario
+      const newScenario = await createScenario(title, description);
+      scenarioId = newScenario.id;
+      addLog(`テストステップを登録しました: ${title}`);
     }
+
+    // 2. Process image diff
+    for (const image of images) {
+      if (image.existingId && image.markedForDeletion) {
+        // Delete existing image marked for deletion
+        await deleteStepImage(image.existingId);
+      } else if (!image.existingId && !image.markedForDeletion) {
+        // Add new image
+        await addStepImage(scenarioId, image.base64, image.fileName, image.mimeType);
+      }
+      // Existing images without deletion flag are kept (no action needed)
+    }
+
     await loadScenarios();
     showScenarioForm.value = false;
     editingScenario.value = null;
+    editingScenarioImages.value = [];
   } catch (error) {
     errorMessage.value =
       error instanceof Error ? error.message : String(error);
@@ -117,6 +149,7 @@ async function handleSaveScenario(title: string, description: string) {
 function handleCancelForm() {
   showScenarioForm.value = false;
   editingScenario.value = null;
+  editingScenarioImages.value = [];
 }
 
 function openDeleteConfirm(scenario: StoredScenario) {
@@ -128,8 +161,11 @@ async function handleDeleteScenario() {
   if (!deletingScenario.value) return;
   try {
     await deleteScenario(deletingScenario.value.id);
-    selectedIds.value.delete(deletingScenario.value.id);
-    addLog(`シナリオを削除しました: ${deletingScenario.value.title}`);
+    // Create new Set to trigger Vue reactivity (Set.delete doesn't trigger)
+    const newSelectedIds = new Set(selectedIds.value);
+    newSelectedIds.delete(deletingScenario.value.id);
+    selectedIds.value = newSelectedIds;
+    addLog(`テストステップを削除しました: ${deletingScenario.value.title}`);
     await loadScenarios();
     showDeleteConfirm.value = false;
     deletingScenario.value = null;
@@ -140,9 +176,9 @@ async function handleDeleteScenario() {
 }
 
 async function handleOrderUpdate(newOrder: StoredScenario[]) {
-  // Store previous order for rollback
-  const previousOrder = [...scenarios.value];
-  // Optimistically update UI
+  // Store previous order for rollback (deep copy to ensure isolation)
+  const previousOrder = scenarios.value.map((s) => ({ ...s }));
+  // Optimistically update UI with new order
   scenarios.value = newOrder;
 
   const orders = newOrder.map((s, i) => ({ id: s.id, orderIndex: i }));
@@ -169,7 +205,7 @@ async function executeSelected() {
     // Get selected IDs in display order from component
     const orderedIds = scenarioListRef.value?.getSelectedIdsInOrder() ?? [...selectedIds.value];
 
-    addLog(`${orderedIds.length}個のシナリオを実行開始...`);
+    addLog(`${orderedIds.length}個のテストステップを実行開始...`);
 
     const result = await runSelectedScenarios(orderedIds, scenarios.value, {
       stopOnFailure: false,
@@ -210,8 +246,7 @@ function addLog(message: string) {
 
 <template>
   <main class="container">
-    <h1>Xenotester</h1>
-    <p class="subtitle">AI Desktop Agent for Automated Testing</p>
+    <img src="/logo.png" alt="Xenotester" class="app-logo" />
 
     <!-- Permission Warning -->
     <div
@@ -245,13 +280,13 @@ function addLog(message: string) {
     <!-- Scenario Management Section -->
     <section class="management-section">
       <div class="section-header">
-        <h2>シナリオ管理</h2>
+        <p class="tagline">AI-Powered E2E Test Automation Tool</p>
         <button
           @click="openNewScenarioForm"
           :disabled="isRunning"
           class="primary-button"
         >
-          + 新規シナリオ登録
+          + 新規テストステップ登録
         </button>
       </div>
 
@@ -278,7 +313,7 @@ function addLog(message: string) {
           :disabled="!canExecute"
           class="execute-button"
         >
-          チェックしたシナリオを実行
+          チェックしたテストステップを実行
         </button>
         <button v-else @click="stopExecution" class="danger-button">
           停止 (Shift+Esc)
@@ -303,6 +338,7 @@ function addLog(message: string) {
     <ScenarioForm
       :visible="showScenarioForm"
       :scenario="editingScenario"
+      :existing-images="editingScenarioImages"
       @save="handleSaveScenario"
       @cancel="handleCancelForm"
     />
@@ -351,18 +387,19 @@ body {
 .container {
   max-width: 900px;
   margin: 0 auto;
-  padding: 20px;
+  padding: 10px 20px;
 }
 
-h1 {
+.app-logo {
+  width: 280px;
   margin-bottom: 0;
-  color: #24c8db;
 }
 
-.subtitle {
+.tagline {
+  font-size: 0.85rem;
   color: #888;
-  margin-top: 5px;
-  margin-bottom: 20px;
+  margin: 0;
+  margin-left: 10px;
 }
 
 h2 {
@@ -408,6 +445,7 @@ h2 {
 }
 
 .management-section {
+  margin-top: 0;
   margin-bottom: 24px;
 }
 

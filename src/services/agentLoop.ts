@@ -40,12 +40,14 @@ import type {
   TestResult,
   ExpectedAction,
   ProgressTracker,
+  StepImage,
 } from '../types';
 import { DEFAULT_AGENT_LOOP_CONFIG, DEFAULT_CLAUDE_MODEL_CONFIG } from '../types';
 
 /** Options for agent loop */
 export interface AgentLoopOptions {
   scenario: Scenario;
+  hintImages?: StepImage[];
   abortSignal: AbortSignal;
   onIteration?: (iteration: number) => void;
   onLog?: (message: string) => void;
@@ -161,24 +163,50 @@ export async function runAgentLoop(
     captureResult = await invoke<CaptureResult>('capture_screen');
     previousScreenshotBase64 = captureResult.imageBase64;
 
+    // Build initial message content
+    type MediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+    const initialMessageContent: Array<
+      | { type: 'text'; text: string }
+      | { type: 'image'; source: { type: 'base64'; media_type: MediaType; data: string } }
+    > = [
+      {
+        type: 'text',
+        text: `${options.scenario.description}\n\n${RESULT_SCHEMA_INSTRUCTION}`,
+      },
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/png',
+          data: captureResult.imageBase64,
+        },
+      },
+    ];
+
+    // Add hint images if provided
+    if (options.hintImages && options.hintImages.length > 0) {
+      log(`[Agent Loop] Adding ${options.hintImages.length} hint images to request`);
+      initialMessageContent.push({
+        type: 'text',
+        text: '\n\n【ヒント画像】\n以下は、探してほしい要素やクリック対象のキャプチャです。これらを参考にして正確に操作してください：',
+      });
+      for (const hintImage of options.hintImages) {
+        initialMessageContent.push({
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: hintImage.mime_type as MediaType,
+            data: hintImage.image_data,
+          },
+        });
+      }
+    }
+
     // Initial message with scenario description, screenshot, and result schema instruction
     messages = [
       {
         role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: `${options.scenario.description}\n\n${RESULT_SCHEMA_INSTRUCTION}`,
-          },
-          {
-            type: 'image',
-            source: {
-              type: 'base64',
-              media_type: 'image/png',
-              data: captureResult.imageBase64,
-            },
-          },
-        ],
+        content: initialMessageContent,
       },
     ];
 

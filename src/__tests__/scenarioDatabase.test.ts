@@ -245,4 +245,153 @@ describe('Scenario Database Service', () => {
       expect(result).toBeNull();
     });
   });
+
+  // Step Image Tests
+  describe('addStepImage', () => {
+    it('should add a new image to a scenario', async () => {
+      mockSelect.mockResolvedValueOnce([{ max_order: null }]); // For max order query
+      mockExecute.mockResolvedValueOnce(undefined);
+
+      const { addStepImage } = await import('../services/scenarioDatabase');
+      const result = await addStepImage(
+        'scenario-123',
+        'base64ImageData',
+        'test.png',
+        'image/png'
+      );
+
+      expect(mockExecute).toHaveBeenCalledWith(
+        'INSERT INTO step_images (id, scenario_id, image_data, file_name, mime_type, order_index) VALUES (?, ?, ?, ?, ?, ?)',
+        [mockUUID, 'scenario-123', 'base64ImageData', 'test.png', 'image/png', 0]
+      );
+      expect(result.id).toBe(mockUUID);
+      expect(result.scenario_id).toBe('scenario-123');
+      expect(result.file_name).toBe('test.png');
+      expect(result.order_index).toBe(0);
+    });
+
+    it('should increment order_index for subsequent images', async () => {
+      mockSelect.mockResolvedValueOnce([{ max_order: 2 }]); // Existing images
+      mockExecute.mockResolvedValueOnce(undefined);
+
+      const { addStepImage } = await import('../services/scenarioDatabase');
+      const result = await addStepImage(
+        'scenario-123',
+        'base64ImageData',
+        'test.png'
+      );
+
+      expect(result.order_index).toBe(3);
+    });
+  });
+
+  describe('getStepImages', () => {
+    it('should return images for a scenario ordered by order_index', async () => {
+      const mockImages = [
+        { id: 'img1', scenario_id: 'scenario-123', image_data: 'data1', file_name: 'a.png', mime_type: 'image/png', order_index: 0, created_at: '2024-01-01' },
+        { id: 'img2', scenario_id: 'scenario-123', image_data: 'data2', file_name: 'b.png', mime_type: 'image/png', order_index: 1, created_at: '2024-01-02' },
+      ];
+      mockSelect.mockResolvedValueOnce(mockImages);
+
+      const { getStepImages } = await import('../services/scenarioDatabase');
+      const result = await getStepImages('scenario-123');
+
+      expect(mockSelect).toHaveBeenCalledWith(
+        'SELECT * FROM step_images WHERE scenario_id = ? ORDER BY order_index ASC',
+        ['scenario-123']
+      );
+      expect(result).toEqual(mockImages);
+    });
+
+    it('should return empty array when no images exist', async () => {
+      mockSelect.mockResolvedValueOnce([]);
+
+      const { getStepImages } = await import('../services/scenarioDatabase');
+      const result = await getStepImages('scenario-no-images');
+
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('deleteStepImage', () => {
+    it('should delete a single image by id', async () => {
+      mockExecute.mockResolvedValueOnce(undefined);
+
+      const { deleteStepImage } = await import('../services/scenarioDatabase');
+      await deleteStepImage('img-123');
+
+      expect(mockExecute).toHaveBeenCalledWith(
+        'DELETE FROM step_images WHERE id = ?',
+        ['img-123']
+      );
+    });
+  });
+
+  describe('deleteAllStepImages', () => {
+    it('should delete all images for a scenario', async () => {
+      mockExecute.mockResolvedValueOnce(undefined);
+
+      const { deleteAllStepImages } = await import('../services/scenarioDatabase');
+      await deleteAllStepImages('scenario-123');
+
+      expect(mockExecute).toHaveBeenCalledWith(
+        'DELETE FROM step_images WHERE scenario_id = ?',
+        ['scenario-123']
+      );
+    });
+  });
+
+  describe('updateStepImageOrders', () => {
+    it('should update order_index for multiple images within a transaction', async () => {
+      mockExecute
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce(undefined) // UPDATE 1
+        .mockResolvedValueOnce(undefined) // UPDATE 2
+        .mockResolvedValueOnce(undefined); // COMMIT
+
+      const { updateStepImageOrders } = await import('../services/scenarioDatabase');
+      await updateStepImageOrders([
+        { id: 'img1', orderIndex: 1 },
+        { id: 'img2', orderIndex: 0 },
+      ]);
+
+      expect(mockExecute).toHaveBeenCalledTimes(4);
+      expect(mockExecute).toHaveBeenNthCalledWith(1, 'BEGIN TRANSACTION');
+      expect(mockExecute).toHaveBeenNthCalledWith(
+        2,
+        'UPDATE step_images SET order_index = ? WHERE id = ?',
+        [1, 'img1']
+      );
+      expect(mockExecute).toHaveBeenNthCalledWith(
+        3,
+        'UPDATE step_images SET order_index = ? WHERE id = ?',
+        [0, 'img2']
+      );
+      expect(mockExecute).toHaveBeenNthCalledWith(4, 'COMMIT');
+    });
+
+    it('should handle empty orders array without starting transaction', async () => {
+      const { updateStepImageOrders } = await import('../services/scenarioDatabase');
+      await updateStepImageOrders([]);
+
+      expect(mockExecute).not.toHaveBeenCalled();
+    });
+
+    it('should rollback transaction on error', async () => {
+      mockExecute
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockRejectedValueOnce(new Error('DB error')) // UPDATE 1 fails
+        .mockResolvedValueOnce(undefined); // ROLLBACK
+
+      const { updateStepImageOrders } = await import('../services/scenarioDatabase');
+
+      await expect(
+        updateStepImageOrders([
+          { id: 'img1', orderIndex: 0 },
+        ])
+      ).rejects.toThrow('DB error');
+
+      expect(mockExecute).toHaveBeenNthCalledWith(3, 'ROLLBACK');
+    });
+  });
 });

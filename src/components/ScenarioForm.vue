@@ -1,23 +1,30 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
-import type { StoredScenario } from '../types';
+import { ref, computed, watch, onMounted } from 'vue';
+import type { StoredScenario, StepImage, FormImageData } from '../types';
 
 const props = defineProps<{
   scenario?: StoredScenario | null;
   visible: boolean;
+  existingImages?: StepImage[];
 }>();
 
 const emit = defineEmits<{
-  save: [title: string, description: string];
+  save: [title: string, description: string, images: FormImageData[]];
   cancel: [];
 }>();
 
 const title = ref('');
 const description = ref('');
+const images = ref<FormImageData[]>([]);
+const isDragging = ref(false);
+const imageError = ref('');
+
+// File input ref for fallback
+const fileInputRef = ref<HTMLInputElement | null>(null);
 
 const isEditing = computed(() => !!props.scenario);
 const modalTitle = computed(() =>
-  isEditing.value ? 'シナリオ編集' : '新規シナリオ登録'
+  isEditing.value ? 'テストステップ編集' : '新規テストステップ登録'
 );
 
 // Title is optional, only description is required
@@ -34,6 +41,33 @@ const titlePlaceholder = computed(() => {
   return 'タイトル（省略可 - 本文から自動生成）';
 });
 
+// Visible images (excluding deleted ones)
+const visibleImages = computed(() =>
+  images.value.filter((img) => !img.markedForDeletion)
+);
+
+// Initialize images from props
+function initializeImages() {
+  if (props.existingImages && props.existingImages.length > 0) {
+    images.value = props.existingImages.map((img) => ({
+      existingId: img.id,
+      base64: img.image_data,
+      fileName: img.file_name,
+      mimeType: img.mime_type,
+      markedForDeletion: false,
+    }));
+  } else {
+    images.value = [];
+  }
+  imageError.value = '';
+}
+
+// Initialize on mount
+onMounted(() => {
+  initializeImages();
+});
+
+// Watch scenario changes for re-initialization
 watch(
   () => props.scenario,
   (newVal) => {
@@ -48,6 +82,7 @@ watch(
   { immediate: true }
 );
 
+// Watch visible changes for re-initialization
 watch(
   () => props.visible,
   (newVal) => {
@@ -60,19 +95,173 @@ watch(
         title.value = '';
         description.value = '';
       }
+      // Re-initialize images when form opens
+      initializeImages();
     }
   }
 );
 
+// Watch existingImages changes
+watch(
+  () => props.existingImages,
+  () => {
+    if (props.visible) {
+      initializeImages();
+    }
+  },
+  { deep: true }
+);
+
+// Allowed image types
+const ALLOWED_MIME_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/gif',
+  'image/webp',
+];
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+
+// Validate image file
+function validateImageFile(file: File): string | null {
+  if (!ALLOWED_MIME_TYPES.includes(file.type)) {
+    return `${file.name}: サポートされていない形式です（PNG, JPG, GIF, WebPのみ）`;
+  }
+  if (file.size > MAX_FILE_SIZE) {
+    return `${file.name}: ファイルサイズが5MBを超えています`;
+  }
+  return null;
+}
+
+// Convert File to Base64
+async function fileToBase64(
+  file: File
+): Promise<{ base64: string; mimeType: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      // "data:image/png;base64,xxxx" -> "xxxx"
+      const base64 = dataUrl.split(',')[1];
+      const mimeType = dataUrl.split(':')[1].split(';')[0];
+      resolve({ base64, mimeType });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// Process files (from drop or file input)
+async function processFiles(files: FileList | File[]) {
+  imageError.value = '';
+  const errors: string[] = [];
+
+  for (const file of Array.from(files)) {
+    const validationError = validateImageFile(file);
+    if (validationError) {
+      errors.push(validationError);
+      continue;
+    }
+
+    try {
+      const { base64, mimeType } = await fileToBase64(file);
+      images.value.push({
+        base64,
+        fileName: file.name,
+        mimeType,
+        markedForDeletion: false,
+      });
+    } catch (error) {
+      errors.push(`${file.name}: 読み込みに失敗しました`);
+    }
+  }
+
+  if (errors.length > 0) {
+    imageError.value = errors.join('\n');
+  }
+}
+
+// Drag and drop handlers
+function handleDragOver(event: DragEvent) {
+  event.preventDefault();
+  isDragging.value = true;
+}
+
+function handleDragLeave(event: DragEvent) {
+  event.preventDefault();
+  isDragging.value = false;
+}
+
+async function handleDrop(event: DragEvent) {
+  event.preventDefault();
+  isDragging.value = false;
+
+  const files = event.dataTransfer?.files;
+  if (files && files.length > 0) {
+    await processFiles(files);
+  }
+}
+
+// File input handler
+async function handleFileSelect(event: Event) {
+  const input = event.target as HTMLInputElement;
+  if (input.files && input.files.length > 0) {
+    await processFiles(input.files);
+    // Reset input to allow selecting the same file again
+    input.value = '';
+  }
+}
+
+// Click to open file dialog
+function openFileDialog() {
+  fileInputRef.value?.click();
+}
+
+// Remove image
+function removeImage(index: number) {
+  const actualIndex = findActualIndex(index);
+  if (actualIndex === -1) return;
+
+  const image = images.value[actualIndex];
+  if (image.existingId) {
+    // Mark existing image for deletion
+    image.markedForDeletion = true;
+  } else {
+    // Remove new image from array
+    images.value.splice(actualIndex, 1);
+  }
+}
+
+// Find actual index in images array from visible index
+function findActualIndex(visibleIndex: number): number {
+  let count = 0;
+  for (let i = 0; i < images.value.length; i++) {
+    if (!images.value[i].markedForDeletion) {
+      if (count === visibleIndex) return i;
+      count++;
+    }
+  }
+  return -1;
+}
+
+// Get image data URL for display
+function getImageDataUrl(image: FormImageData): string {
+  return `data:${image.mimeType};base64,${image.base64}`;
+}
+
 function handleSave() {
   if (!canSave.value) return;
   // Title can be empty - will be auto-generated by service
-  emit('save', title.value.trim(), description.value.trim());
+  emit('save', title.value.trim(), description.value.trim(), images.value);
+}
+
+function handleCancel() {
+  emit('cancel');
 }
 </script>
 
 <template>
-  <div v-if="visible" class="modal-overlay" @click.self="$emit('cancel')">
+  <div v-if="visible" class="modal-overlay" @click.self="handleCancel">
     <div class="modal scenario-form-modal">
       <h2>{{ modalTitle }}</h2>
       <div class="form-group">
@@ -86,18 +275,18 @@ function handleSave() {
           :placeholder="titlePlaceholder"
         />
         <p class="hint-text">
-          未入力の場合、シナリオ内容の先頭から自動生成されます
+          未入力の場合、テストステップ内容の先頭から自動生成されます
         </p>
       </div>
       <div class="form-group">
         <label for="description-input"
-          >シナリオ内容 <span class="required-label">*</span></label
+          >テストステップ内容 <span class="required-label">*</span></label
         >
         <textarea
           id="description-input"
           v-model="description"
           rows="10"
-          placeholder="テストシナリオの詳細を入力...
+          placeholder="テストステップの詳細を入力...
 
 例:
 1. Chromeを開く
@@ -105,8 +294,65 @@ function handleSave() {
 3. 'Tauri framework'を検索"
         ></textarea>
       </div>
+
+      <!-- Image Drop Zone -->
+      <div class="form-group">
+        <label>ヒント画像 <span class="optional-label">（省略可）</span></label>
+        <p class="hint-text image-hint">
+          クリック対象や探してほしい要素のスクリーンショットをドラッグ&ドロップで追加できます
+        </p>
+        <div
+          class="drop-zone"
+          :class="{ dragging: isDragging }"
+          @dragover="handleDragOver"
+          @dragleave="handleDragLeave"
+          @drop="handleDrop"
+          @click="openFileDialog"
+        >
+          <input
+            ref="fileInputRef"
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            multiple
+            class="file-input"
+            @change="handleFileSelect"
+          />
+          <div class="drop-zone-content">
+            <span class="drop-icon">+</span>
+            <span class="drop-text">
+              画像をドラッグ&ドロップ<br />またはクリックして選択
+            </span>
+          </div>
+        </div>
+
+        <!-- Error message -->
+        <p v-if="imageError" class="error-text">{{ imageError }}</p>
+
+        <!-- Image previews -->
+        <div v-if="visibleImages.length > 0" class="image-previews">
+          <div
+            v-for="(image, index) in visibleImages"
+            :key="image.existingId || `new-${index}`"
+            class="image-preview"
+          >
+            <img :src="getImageDataUrl(image)" :alt="image.fileName" />
+            <div class="image-info">
+              <span class="image-name">{{ image.fileName }}</span>
+            </div>
+            <button
+              type="button"
+              class="remove-image-btn"
+              @click.stop="removeImage(index)"
+              title="削除"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div class="button-row">
-        <button @click="$emit('cancel')" class="secondary-button">
+        <button @click="handleCancel" class="secondary-button">
           キャンセル
         </button>
         <button @click="handleSave" class="primary-button" :disabled="!canSave">
@@ -134,6 +380,8 @@ function handleSave() {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
   width: 90%;
   max-width: 600px;
+  max-height: 90vh;
+  overflow-y: auto;
 }
 @media (prefers-color-scheme: dark) {
   .modal {
@@ -167,6 +415,9 @@ function handleSave() {
   margin-top: 4px;
   margin-bottom: 0;
 }
+.image-hint {
+  margin-bottom: 8px;
+}
 .form-group input,
 .form-group textarea {
   width: 100%;
@@ -189,6 +440,140 @@ function handleSave() {
   resize: vertical;
   min-height: 150px;
 }
+
+/* Drop zone styles */
+.drop-zone {
+  border: 2px dashed #ccc;
+  border-radius: 8px;
+  padding: 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+.drop-zone:hover {
+  border-color: #24c8db;
+  background: rgba(36, 200, 219, 0.05);
+}
+.drop-zone.dragging {
+  border-color: #24c8db;
+  background: rgba(36, 200, 219, 0.1);
+  border-style: solid;
+}
+@media (prefers-color-scheme: dark) {
+  .drop-zone {
+    border-color: #555;
+  }
+  .drop-zone:hover {
+    border-color: #24c8db;
+    background: rgba(36, 200, 219, 0.1);
+  }
+  .drop-zone.dragging {
+    background: rgba(36, 200, 219, 0.15);
+  }
+}
+.file-input {
+  display: none;
+}
+.drop-zone-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.drop-icon {
+  font-size: 32px;
+  color: #888;
+  line-height: 1;
+}
+.drop-text {
+  font-size: 13px;
+  color: #666;
+  line-height: 1.4;
+}
+@media (prefers-color-scheme: dark) {
+  .drop-icon {
+    color: #aaa;
+  }
+  .drop-text {
+    color: #aaa;
+  }
+}
+
+/* Image previews */
+.image-previews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+.image-preview {
+  position: relative;
+  width: 100px;
+  height: 100px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #ddd;
+}
+@media (prefers-color-scheme: dark) {
+  .image-preview {
+    border-color: #555;
+  }
+}
+.image-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.image-info {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 4px 6px;
+  font-size: 10px;
+  color: white;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.image-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.remove-image-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(220, 53, 69, 0.9);
+  color: white;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.remove-image-btn:hover {
+  background: #dc3545;
+}
+
+/* Error text */
+.error-text {
+  font-size: 12px;
+  color: #dc3545;
+  margin-top: 8px;
+  margin-bottom: 0;
+  white-space: pre-line;
+}
+
 .button-row {
   display: flex;
   gap: 12px;

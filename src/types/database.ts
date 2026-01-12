@@ -25,6 +25,29 @@ export interface StoredScenario {
   updated_at: string;
 }
 
+/** Step image hint attached to a test step */
+export interface StepImage {
+  id: string;
+  scenario_id: string;
+  image_data: string; // Raw Base64 (without data: prefix)
+  file_name: string;
+  mime_type: string;
+  order_index: number;
+  created_at: string;
+}
+
+/** Form image data for handling new/existing images */
+export interface FormImageData {
+  /** Existing image ID (undefined for new images) */
+  existingId?: string;
+  /** Raw Base64 data (without data: prefix) */
+  base64: string;
+  fileName: string;
+  mimeType: string;
+  /** Deletion flag for existing images during edit */
+  markedForDeletion?: boolean;
+}
+
 /** Result of a single scenario execution */
 export interface ScenarioExecutionResult {
   scenarioId: string;

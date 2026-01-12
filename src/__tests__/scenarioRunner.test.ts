@@ -26,12 +26,21 @@ vi.mock('../services/agentLoop', () => ({
   runAgentLoop: mockRunAgentLoop,
 }));
 
+// Mock scenarioDatabase (for getStepImages)
+const mockGetStepImages = vi.fn();
+
+vi.mock('../services/scenarioDatabase', () => ({
+  getStepImages: mockGetStepImages,
+}));
+
 describe('ScenarioRunner', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Setup default mock returns
     mockInvoke.mockResolvedValue(undefined);
     mockListen.mockResolvedValue(mockUnlisten);
+    // Default: return empty array for hint images
+    mockGetStepImages.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -368,8 +377,8 @@ describe('ScenarioRunner', () => {
       });
 
       // Should have start and success logs
-      expect(logs.some((l) => l.includes('シナリオ開始'))).toBe(true);
-      expect(logs.some((l) => l.includes('シナリオ成功'))).toBe(true);
+      expect(logs.some((l) => l.includes('テストステップ開始'))).toBe(true);
+      expect(logs.some((l) => l.includes('テストステップ成功'))).toBe(true);
 
       await runner.destroy();
     });

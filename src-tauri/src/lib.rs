@@ -16,12 +16,20 @@ use utils::hotkey::register_emergency_stop;
 
 /// Get SQLite migrations
 fn get_migrations() -> Vec<Migration> {
-    vec![Migration {
-        version: 1,
-        description: "create_scenarios_table",
-        sql: include_str!("../migrations/001_create_scenarios.sql"),
-        kind: MigrationKind::Up,
-    }]
+    vec![
+        Migration {
+            version: 1,
+            description: "create_scenarios_table",
+            sql: include_str!("../migrations/001_create_scenarios.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 2,
+            description: "create_step_images_table",
+            sql: include_str!("../migrations/002_create_step_images.sql"),
+            kind: MigrationKind::Up,
+        },
+    ]
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

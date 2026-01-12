@@ -5,6 +5,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { runAgentLoop, type AgentLoopResult } from './agentLoop';
+import { getStepImages } from './scenarioDatabase';
 import type {
   Scenario,
   ScenarioRunnerState,
@@ -256,6 +257,9 @@ export class ScenarioRunner {
     // Clear any previous stop request
     await invoke('clear_stop');
 
+    // Notify initial state
+    this.notifyStateChange();
+
     // Execute in orderedScenarioIds order (order guarantee)
     for (let i = 0; i < orderedScenarioIds.length; i++) {
       const scenarioId = orderedScenarioIds[i];
@@ -276,9 +280,16 @@ export class ScenarioRunner {
       if (!scenario) continue;
 
       this.state.currentIndex = i;
+      this.notifyStateChange();
       this.log(
-        `[Batch Runner] シナリオ開始 (${i + 1}/${orderedScenarioIds.length}): ${scenario.title}`
+        `[Batch Runner] テストステップ開始 (${i + 1}/${orderedScenarioIds.length}): ${scenario.title}`
       );
+
+      // Load hint images for this scenario
+      const hintImages = await getStepImages(scenario.id);
+      if (hintImages.length > 0) {
+        this.log(`[Batch Runner] ${hintImages.length}枚のヒント画像を読み込みました`);
+      }
 
       // Execute scenario
       const agentResult = await runAgentLoop({
@@ -288,6 +299,7 @@ export class ScenarioRunner {
           description: scenario.description,
           status: 'pending',
         },
+        hintImages,
         abortSignal: this.abortController.signal,
         onLog: this.log.bind(this),
         config: options.agentConfig,
@@ -315,11 +327,11 @@ export class ScenarioRunner {
 
       if (agentResult.success) {
         successCount++;
-        this.log(`[Batch Runner] シナリオ成功: ${scenario.title}`);
+        this.log(`[Batch Runner] テストステップ成功: ${scenario.title}`);
       } else {
         failureCount++;
         this.log(
-          `[Batch Runner] シナリオ失敗: ${scenario.title} - ${agentResult.error}`
+          `[Batch Runner] テストステップ失敗: ${scenario.title} - ${agentResult.error}`
         );
 
         // Stop if stopOnFailure is set
@@ -331,6 +343,7 @@ export class ScenarioRunner {
     }
 
     this.state.isRunning = false;
+    this.notifyStateChange();
 
     return {
       totalScenarios: orderedScenarioIds.length,
