@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
 import type { StoredScenario, StepImage, FormImageData } from '../types';
+import {
+  ALLOWED_MIME_TYPES,
+  MAX_FILE_SIZE,
+  MAX_IMAGE_COUNT,
+  MAX_TOTAL_SIZE,
+} from '../constants/hintImages';
 
 const props = defineProps<{
   scenario?: StoredScenario | null;
@@ -118,17 +124,11 @@ watch(
   { deep: true }
 );
 
-// Allowed image types (image/jpg is normalized to image/jpeg)
-const ALLOWED_MIME_TYPES = [
-  'image/png',
-  'image/jpeg',
-  'image/jpg', // Non-standard but accepted, will be normalized to image/jpeg
-  'image/gif',
-  'image/webp',
-];
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB per file (Claude API limit)
-const MAX_IMAGE_COUNT = 20; // Maximum number of hint images (Claude API allows up to 100, but 20+ triggers 2000px dimension limit)
-const MAX_TOTAL_SIZE = 15 * 1024 * 1024; // 15MB total for hint images (Claude API has 32MB request limit, reserving space for screenshots)
+// Image limit constants are imported from ../constants/hintImages
+// These limits are based on Claude API constraints:
+// - MAX_IMAGE_COUNT: 20 (20+ images trigger 2000px dimension limit)
+// - MAX_FILE_SIZE: 5MB per file
+// - MAX_TOTAL_SIZE: 15MB total (32MB API limit minus screenshot buffer)
 
 // Warning state
 const imageLimitWarning = ref('');
@@ -148,7 +148,7 @@ function normalizeMimeType(mimeType: string): string {
 
 // Validate image file
 function validateImageFile(file: File): string | null {
-  if (!ALLOWED_MIME_TYPES.includes(file.type)) {
+  if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(file.type)) {
     return `${file.name}: サポートされていない形式です（PNG, JPG, GIF, WebPのみ）`;
   }
   if (file.size > MAX_FILE_SIZE) {
