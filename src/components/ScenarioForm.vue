@@ -83,8 +83,9 @@ function initializeImages() {
   }
 }
 
-// Validate existing images and show warnings for oversized or invalid images
-function validateExistingImages() {
+// Validate all images and show warnings for oversized or invalid images
+// This function recalculates fileWarning based on current visible images
+function validateAllImages() {
   const warnings: string[] = [];
 
   for (const img of images.value) {
@@ -106,12 +107,16 @@ function validateExistingImages() {
     }
   }
 
-  if (warnings.length > 0) {
-    fileWarning.value = warnings.join('\n');
-  }
+  // Always update fileWarning (clear if no warnings)
+  fileWarning.value = warnings.length > 0 ? warnings.join('\n') : '';
 
   // Also recalculate API limit warning
   recalculateWarning();
+}
+
+// Alias for backward compatibility (called from initializeImages)
+function validateExistingImages() {
+  validateAllImages();
 }
 
 // Initialize on mount
@@ -168,7 +173,7 @@ watch(
 // These limits are based on Claude API constraints:
 // - MAX_IMAGE_COUNT: 20 (20+ images trigger 2000px dimension limit)
 // - MAX_FILE_SIZE: 5MB per file
-// - MAX_TOTAL_SIZE: 15MB total (32MB API limit minus screenshot buffer)
+// - MAX_TOTAL_SIZE: 11MB total (32MB API limit minus base64 overhead and screenshot buffer)
 
 // Warning states
 // API limit warning (recalculated on visibleImages change)
@@ -244,8 +249,6 @@ async function fileToBase64(
 // If validation fails, execution is stopped and user is asked to reduce images.
 async function processFiles(files: FileList | File[]) {
   imageError.value = '';
-  fileWarning.value = '';
-  const fileWarnings: string[] = [];
   const errors: string[] = [];
   isProcessingImages.value = true;
 
@@ -258,12 +261,6 @@ async function processFiles(files: FileList | File[]) {
       if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(file.type)) {
         errors.push(`${file.name}: サポートされていない形式です（PNG, JPG, GIF, WebPのみ）`);
         continue;
-      }
-
-      // Warn about large files - they will cause execution to be blocked
-      if (file.size > MAX_FILE_SIZE) {
-        const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
-        fileWarnings.push(`${file.name}: ${sizeMB}MBのため実行がブロックされます（1枚${UI_MAX_FILE_SIZE_MB}MB以下にしてください）`);
       }
 
       try {
@@ -279,18 +276,14 @@ async function processFiles(files: FileList | File[]) {
       }
     }
 
-    // Show individual file warnings (non-blocking)
-    if (fileWarnings.length > 0) {
-      fileWarning.value = fileWarnings.join('\n');
-    }
-
     // Show errors (blocking for those files only)
     if (errors.length > 0) {
       imageError.value = errors.join('\n');
     }
 
-    // Recalculate API limit warning
-    recalculateWarning();
+    // Recalculate all warnings (fileWarning and imageLimitWarning)
+    // This ensures both existing and new images are validated
+    validateAllImages();
   } finally {
     isProcessingImages.value = false;
   }

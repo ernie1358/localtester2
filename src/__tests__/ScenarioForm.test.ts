@@ -196,15 +196,19 @@ describe('ScenarioForm Component', () => {
     });
 
     it('should show warning for file exceeding 5MB but still allow save', async () => {
-      // Mock FileReader to be synchronous for testing
+      // Mock FileReader to return large base64 data (simulating a 6MB file)
       const originalFileReader = globalThis.FileReader;
+      // 6MB in raw bytes = ~8MB in base64 (base64 length = bytes / 0.75)
+      const largeBase64 = 'a'.repeat(Math.ceil((6 * 1024 * 1024) / 0.75));
+
       class MockFileReader {
         onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
         onerror: (() => void) | null = null;
         result: string | null = null;
 
         readAsDataURL(_file: File) {
-          this.result = 'data:image/png;base64,testdata';
+          // Return large base64 to trigger size warning in validateAllImages
+          this.result = `data:image/png;base64,${largeBase64}`;
           Promise.resolve().then(() => {
             if (this.onload) {
               this.onload({ target: this } as unknown as ProgressEvent<FileReader>);
@@ -849,6 +853,190 @@ describe('ScenarioForm Component', () => {
         // Should NOT show warning (under API limit)
         const warningText = wrapper.find('.warning-text');
         expect(warningText.exists()).toBe(false);
+      } finally {
+        globalThis.FileReader = originalFileReader;
+      }
+    });
+  });
+
+  describe('File Warning Synchronization', () => {
+    it('should preserve existing oversized file warnings when adding new valid files', async () => {
+      // Mock FileReader for new file additions
+      const originalFileReader = globalThis.FileReader;
+      class MockFileReader {
+        onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+        onerror: (() => void) | null = null;
+        result: string | null = null;
+
+        readAsDataURL(_file: File) {
+          this.result = 'data:image/png;base64,testdata';
+          Promise.resolve().then(() => {
+            if (this.onload) {
+              this.onload({ target: this } as unknown as ProgressEvent<FileReader>);
+            }
+          });
+        }
+      }
+      globalThis.FileReader = MockFileReader as unknown as typeof FileReader;
+
+      try {
+        // Create an oversized existing image (>5MB in base64)
+        // 6MB = 6 * 1024 * 1024 bytes, base64 length = bytes / 0.75
+        const oversizedBase64 = 'a'.repeat(Math.ceil((6 * 1024 * 1024) / 0.75));
+
+        const existingImages: StepImage[] = [
+          createMockStepImage({
+            id: 'oversized-img',
+            file_name: 'oversized.png',
+            image_data: oversizedBase64,
+          }),
+        ];
+
+        const wrapper = mount(ScenarioForm, {
+          props: {
+            visible: true,
+            scenario: null,
+            existingImages,
+          },
+        });
+
+        await flushPromises();
+
+        // Should show warning for oversized existing image on load
+        let warningText = wrapper.find('.warning-text');
+        expect(warningText.exists()).toBe(true);
+        expect(warningText.text()).toContain('oversized.png');
+        expect(warningText.text()).toContain('実行がブロックされます');
+
+        // Add a new valid (small) file
+        const smallFile = createMockFile('small.png', 100, 'image/png');
+        const dropZone = wrapper.find('.drop-zone');
+
+        await dropZone.trigger('drop', {
+          dataTransfer: createMockDataTransfer([smallFile]),
+        });
+        await flushPromises();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        await flushPromises();
+
+        // Warning should still exist for the oversized existing image
+        warningText = wrapper.find('.warning-text');
+        expect(warningText.exists()).toBe(true);
+        expect(warningText.text()).toContain('oversized.png');
+        expect(warningText.text()).toContain('実行がブロックされます');
+
+        // Both images should be displayed
+        const previews = wrapper.findAll('.image-preview');
+        expect(previews.length).toBe(2);
+      } finally {
+        globalThis.FileReader = originalFileReader;
+      }
+    });
+
+    it('should clear file warning when oversized image is deleted', async () => {
+      // Create an oversized existing image (>5MB in base64)
+      const oversizedBase64 = 'a'.repeat(Math.ceil((6 * 1024 * 1024) / 0.75));
+
+      const existingImages: StepImage[] = [
+        createMockStepImage({
+          id: 'oversized-img',
+          file_name: 'oversized.png',
+          image_data: oversizedBase64,
+        }),
+        createMockStepImage({
+          id: 'normal-img',
+          file_name: 'normal.png',
+          image_data: 'normaldata',
+        }),
+      ];
+
+      const wrapper = mount(ScenarioForm, {
+        props: {
+          visible: true,
+          scenario: null,
+          existingImages,
+        },
+      });
+
+      await flushPromises();
+
+      // Should show warning for oversized image on load
+      let warningText = wrapper.find('.warning-text');
+      expect(warningText.exists()).toBe(true);
+      expect(warningText.text()).toContain('oversized.png');
+
+      // Delete the oversized image (first in the list)
+      await wrapper.findAll('.remove-image-btn')[0].trigger('click');
+      await flushPromises();
+
+      // Warning should be cleared (only normal image remains)
+      warningText = wrapper.find('.warning-text');
+      expect(warningText.exists()).toBe(false);
+
+      // Only one image should remain
+      const previews = wrapper.findAll('.image-preview');
+      expect(previews.length).toBe(1);
+    });
+
+    it('should preserve new file warnings when adding multiple files with mixed sizes', async () => {
+      // Mock FileReader to return different sizes based on file name
+      const originalFileReader = globalThis.FileReader;
+      class MockFileReader {
+        onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+        onerror: (() => void) | null = null;
+        result: string | null = null;
+
+        readAsDataURL(file: File) {
+          // Simulate large file with large base64 (>5MB raw)
+          const isLarge = file.name.includes('large');
+          const base64Data = isLarge
+            ? 'a'.repeat(Math.ceil((6 * 1024 * 1024) / 0.75))
+            : 'smalldata';
+          this.result = `data:image/png;base64,${base64Data}`;
+          Promise.resolve().then(() => {
+            if (this.onload) {
+              this.onload({ target: this } as unknown as ProgressEvent<FileReader>);
+            }
+          });
+        }
+      }
+      globalThis.FileReader = MockFileReader as unknown as typeof FileReader;
+
+      try {
+        const wrapper = mount(ScenarioForm, {
+          props: {
+            visible: true,
+            scenario: null,
+            existingImages: [],
+          },
+        });
+
+        await flushPromises();
+
+        // Add both a large and a small file
+        const files = [
+          createMockFile('large.png', 6 * 1024 * 1024, 'image/png'),
+          createMockFile('small.png', 100, 'image/png'),
+        ];
+
+        const dropZone = wrapper.find('.drop-zone');
+
+        await dropZone.trigger('drop', {
+          dataTransfer: createMockDataTransfer(files),
+        });
+        await flushPromises();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        await flushPromises();
+
+        // Should show warning for the large file
+        const warningText = wrapper.find('.warning-text');
+        expect(warningText.exists()).toBe(true);
+        expect(warningText.text()).toContain('large.png');
+        expect(warningText.text()).toContain('実行がブロックされます');
+
+        // Both images should be added (save is unlimited)
+        const previews = wrapper.findAll('.image-preview');
+        expect(previews.length).toBe(2);
       } finally {
         globalThis.FileReader = originalFileReader;
       }
