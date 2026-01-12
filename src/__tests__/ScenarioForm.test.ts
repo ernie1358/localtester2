@@ -253,40 +253,67 @@ describe('ScenarioForm Component', () => {
     });
 
     it('should show warning when partially adding images due to limit', async () => {
-      const existingImages: StepImage[] = Array(8)
-        .fill(null)
-        .map((_, i) =>
-          createMockStepImage({
-            id: `img-${i}`,
-            file_name: `image${i}.png`,
-          })
-        );
+      // Mock FileReader to be synchronous for testing
+      const originalFileReader = globalThis.FileReader;
+      class MockFileReader {
+        onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+        onerror: (() => void) | null = null;
+        result: string | null = null;
 
-      const wrapper = mount(ScenarioForm, {
-        props: {
-          visible: true,
-          scenario: null,
-          existingImages,
-        },
-      });
+        readAsDataURL(_file: File) {
+          // Synchronously set result and call onload
+          this.result = 'data:image/png;base64,testdata';
+          Promise.resolve().then(() => {
+            if (this.onload) {
+              this.onload({ target: this } as unknown as ProgressEvent<FileReader>);
+            }
+          });
+        }
+      }
+      globalThis.FileReader = MockFileReader as unknown as typeof FileReader;
 
-      await flushPromises();
+      try {
+        const existingImages: StepImage[] = Array(8)
+          .fill(null)
+          .map((_, i) =>
+            createMockStepImage({
+              id: `img-${i}`,
+              file_name: `image${i}.png`,
+            })
+          );
 
-      // Try to add 5 images when only 2 slots are available
-      const mockFiles = Array(5)
-        .fill(null)
-        .map((_, i) => createMockFile(`new${i}.png`, 100, 'image/png'));
+        const wrapper = mount(ScenarioForm, {
+          props: {
+            visible: true,
+            scenario: null,
+            existingImages,
+          },
+        });
 
-      const dropZone = wrapper.find('.drop-zone');
+        await flushPromises();
 
-      await dropZone.trigger('drop', {
-        dataTransfer: createMockDataTransfer(mockFiles),
-      });
-      await flushPromises();
+        // Try to add 5 valid images when only 2 slots are available
+        const mockFiles = Array(5)
+          .fill(null)
+          .map((_, i) => createMockFile(`new${i}.png`, 100, 'image/png'));
 
-      const warningText = wrapper.find('.warning-text');
-      expect(warningText.exists()).toBe(true);
-      expect(warningText.text()).toContain('5枚中2枚のみ追加可能');
+        const dropZone = wrapper.find('.drop-zone');
+
+        await dropZone.trigger('drop', {
+          dataTransfer: createMockDataTransfer(mockFiles),
+        });
+
+        // Wait for all async processing
+        await flushPromises();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        await flushPromises();
+
+        const warningText = wrapper.find('.warning-text');
+        expect(warningText.exists()).toBe(true);
+        expect(warningText.text()).toContain('5枚中2枚のみ追加しました');
+      } finally {
+        globalThis.FileReader = originalFileReader;
+      }
     });
   });
 
@@ -449,6 +476,196 @@ describe('ScenarioForm Component', () => {
       // Access component instance to verify ref exists
       const vm = wrapper.vm as unknown as { isProcessingImages: { value: boolean } };
       expect(typeof vm.isProcessingImages).toBe('boolean');
+    });
+  });
+
+  describe('Total Size Limit', () => {
+    it('should show error when total size exceeds 20MB', async () => {
+      // Start with existing images that are close to the 20MB limit
+      // Use 5 images of ~3.5MB each (17.5MB total)
+      const existingImages: StepImage[] = Array(5)
+        .fill(null)
+        .map((_, i) =>
+          createMockStepImage({
+            id: `img-${i}`,
+            file_name: `large${i}.png`,
+            // 3.5MB worth of base64 data (~4.66MB in base64)
+            image_data: 'a'.repeat(Math.floor((3.5 * 1024 * 1024) / 0.75)),
+          })
+        );
+
+      const wrapper = mount(ScenarioForm, {
+        props: {
+          visible: true,
+          scenario: null,
+          existingImages,
+        },
+      });
+
+      await flushPromises();
+
+      // Try to add a 5MB file (would exceed 20MB total)
+      const largeFile = createMockFile('extra.png', 5 * 1024 * 1024, 'image/png');
+      const dropZone = wrapper.find('.drop-zone');
+
+      await dropZone.trigger('drop', {
+        dataTransfer: createMockDataTransfer([largeFile]),
+      });
+      await flushPromises();
+
+      const errorText = wrapper.find('.error-text');
+      expect(errorText.exists()).toBe(true);
+      expect(errorText.text()).toContain('総容量が20MBを超えます');
+    });
+  });
+
+  describe('Invalid Files Mixed with Valid Files', () => {
+    it('should skip invalid files and add valid files up to the limit', async () => {
+      // Mock FileReader to be synchronous for testing
+      const originalFileReader = globalThis.FileReader;
+      class MockFileReader {
+        onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+        onerror: (() => void) | null = null;
+        result: string | null = null;
+
+        readAsDataURL(_file: File) {
+          // Synchronously set result and call onload
+          this.result = 'data:image/png;base64,testdata';
+          Promise.resolve().then(() => {
+            if (this.onload) {
+              this.onload({ target: this } as unknown as ProgressEvent<FileReader>);
+            }
+          });
+        }
+      }
+      globalThis.FileReader = MockFileReader as unknown as typeof FileReader;
+
+      try {
+        // Start with 8 existing images
+        const existingImages: StepImage[] = Array(8)
+          .fill(null)
+          .map((_, i) =>
+            createMockStepImage({
+              id: `img-${i}`,
+              file_name: `image${i}.png`,
+            })
+          );
+
+        const wrapper = mount(ScenarioForm, {
+          props: {
+            visible: true,
+            scenario: null,
+            existingImages,
+          },
+        });
+
+        await flushPromises();
+
+        // Drop 5 files: 2 invalid (text files) at the start, then 3 valid
+        // With 8 existing, we have 2 slots available
+        // Old behavior: slice(0, 2) would take the 2 text files, both invalid, add 0 images
+        // New behavior: skip invalid, add valid ones up to limit (2)
+        const mockFiles = [
+          createMockFile('invalid1.txt', 100, 'text/plain'),
+          createMockFile('invalid2.txt', 100, 'text/plain'),
+          createMockFile('valid1.png', 100, 'image/png'),
+          createMockFile('valid2.png', 100, 'image/png'),
+          createMockFile('valid3.png', 100, 'image/png'),
+        ];
+
+        const dropZone = wrapper.find('.drop-zone');
+
+        await dropZone.trigger('drop', {
+          dataTransfer: createMockDataTransfer(mockFiles),
+        });
+
+        // Wait for all async processing
+        await flushPromises();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        await flushPromises();
+
+        // Should have added 2 valid images (slots available)
+        const previews = wrapper.findAll('.image-preview');
+        expect(previews.length).toBe(10); // 8 existing + 2 new valid
+
+        // Should show error for invalid files
+        const errorText = wrapper.find('.error-text');
+        expect(errorText.exists()).toBe(true);
+        expect(errorText.text()).toContain('サポートされていない形式');
+
+        // Should show warning for skipped file due to limit
+        const warningText = wrapper.find('.warning-text');
+        expect(warningText.exists()).toBe(true);
+        expect(warningText.text()).toContain('5枚中2枚のみ追加しました');
+      } finally {
+        globalThis.FileReader = originalFileReader;
+      }
+    });
+
+    it('should add all valid files when no limit reached', async () => {
+      // Mock FileReader to be synchronous for testing
+      const originalFileReader = globalThis.FileReader;
+      class MockFileReader {
+        onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+        onerror: (() => void) | null = null;
+        result: string | null = null;
+
+        readAsDataURL(_file: File) {
+          // Synchronously set result and call onload
+          this.result = 'data:image/png;base64,testdata';
+          Promise.resolve().then(() => {
+            if (this.onload) {
+              this.onload({ target: this } as unknown as ProgressEvent<FileReader>);
+            }
+          });
+        }
+      }
+      globalThis.FileReader = MockFileReader as unknown as typeof FileReader;
+
+      try {
+        const wrapper = mount(ScenarioForm, {
+          props: {
+            visible: true,
+            scenario: null,
+            existingImages: [],
+          },
+        });
+
+        await flushPromises();
+
+        // Drop 3 files: 1 invalid, 2 valid
+        const mockFiles = [
+          createMockFile('invalid.txt', 100, 'text/plain'),
+          createMockFile('valid1.png', 100, 'image/png'),
+          createMockFile('valid2.png', 100, 'image/png'),
+        ];
+
+        const dropZone = wrapper.find('.drop-zone');
+
+        await dropZone.trigger('drop', {
+          dataTransfer: createMockDataTransfer(mockFiles),
+        });
+
+        // Wait for all async processing
+        await flushPromises();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        await flushPromises();
+
+        // Should have added 2 valid images
+        const previews = wrapper.findAll('.image-preview');
+        expect(previews.length).toBe(2);
+
+        // Should show error for invalid file
+        const errorText = wrapper.find('.error-text');
+        expect(errorText.exists()).toBe(true);
+        expect(errorText.text()).toContain('サポートされていない形式');
+
+        // Should NOT show warning (no files skipped due to limit)
+        const warningText = wrapper.find('.warning-text');
+        expect(warningText.exists()).toBe(false);
+      } finally {
+        globalThis.FileReader = originalFileReader;
+      }
     });
   });
 });

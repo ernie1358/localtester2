@@ -193,14 +193,17 @@ async function processFiles(files: FileList | File[]) {
     }
 
     const availableSlots = MAX_IMAGE_COUNT - currentCount;
-    if (fileArray.length > availableSlots) {
-      imageLimitWarning.value = `${fileArray.length}枚中${availableSlots}枚のみ追加可能です（上限: ${MAX_IMAGE_COUNT}枚）`;
-    }
+    let addedCount = 0;
+    let skippedDueToLimit = 0;
 
-    // Process only up to the available slots
-    const filesToProcess = fileArray.slice(0, availableSlots);
+    // Process all files, but only add valid ones up to the available slots
+    for (const file of fileArray) {
+      // Stop if we've reached the limit
+      if (addedCount >= availableSlots) {
+        skippedDueToLimit++;
+        continue;
+      }
 
-    for (const file of filesToProcess) {
       const validationError = validateImageFile(file);
       if (validationError) {
         errors.push(validationError);
@@ -224,9 +227,15 @@ async function processFiles(files: FileList | File[]) {
           mimeType: normalizeMimeType(mimeType),
           markedForDeletion: false,
         });
+        addedCount++;
       } catch (error) {
         errors.push(`${file.name}: 読み込みに失敗しました`);
       }
+    }
+
+    // Show warning if some valid files were skipped due to limit
+    if (skippedDueToLimit > 0) {
+      imageLimitWarning.value = `${fileArray.length}枚中${addedCount}枚のみ追加しました（上限: ${MAX_IMAGE_COUNT}枚）`;
     }
 
     if (errors.length > 0) {
