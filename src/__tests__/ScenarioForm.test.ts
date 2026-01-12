@@ -219,8 +219,8 @@ describe('ScenarioForm Component', () => {
   });
 
   describe('Image Count Limit', () => {
-    it('should show error when trying to add more than 10 images', async () => {
-      const existingImages: StepImage[] = Array(10)
+    it('should show error when trying to add more than 20 images', async () => {
+      const existingImages: StepImage[] = Array(20)
         .fill(null)
         .map((_, i) =>
           createMockStepImage({
@@ -249,7 +249,7 @@ describe('ScenarioForm Component', () => {
 
       const errorText = wrapper.find('.error-text');
       expect(errorText.exists()).toBe(true);
-      expect(errorText.text()).toContain('最大10枚まで');
+      expect(errorText.text()).toContain('最大20枚まで');
     });
 
     it('should show warning when partially adding images due to limit', async () => {
@@ -273,7 +273,8 @@ describe('ScenarioForm Component', () => {
       globalThis.FileReader = MockFileReader as unknown as typeof FileReader;
 
       try {
-        const existingImages: StepImage[] = Array(8)
+        // With MAX_IMAGE_COUNT=20, start with 18 existing images
+        const existingImages: StepImage[] = Array(18)
           .fill(null)
           .map((_, i) =>
             createMockStepImage({
@@ -480,17 +481,17 @@ describe('ScenarioForm Component', () => {
   });
 
   describe('Total Size Limit', () => {
-    it('should show error when total size exceeds 20MB', async () => {
-      // Start with existing images that are close to the 20MB limit
-      // Use 5 images of ~3.5MB each (17.5MB total)
-      const existingImages: StepImage[] = Array(5)
+    it('should show error when total size exceeds 15MB', async () => {
+      // Start with existing images that are close to the 15MB limit
+      // Use 4 images of ~3MB each (12MB total)
+      const existingImages: StepImage[] = Array(4)
         .fill(null)
         .map((_, i) =>
           createMockStepImage({
             id: `img-${i}`,
             file_name: `large${i}.png`,
-            // 3.5MB worth of base64 data (~4.66MB in base64)
-            image_data: 'a'.repeat(Math.floor((3.5 * 1024 * 1024) / 0.75)),
+            // 3MB worth of base64 data (~4MB in base64)
+            image_data: 'a'.repeat(Math.floor((3 * 1024 * 1024) / 0.75)),
           })
         );
 
@@ -504,7 +505,7 @@ describe('ScenarioForm Component', () => {
 
       await flushPromises();
 
-      // Try to add a 5MB file (would exceed 20MB total)
+      // Try to add a 5MB file (would exceed 15MB total)
       const largeFile = createMockFile('extra.png', 5 * 1024 * 1024, 'image/png');
       const dropZone = wrapper.find('.drop-zone');
 
@@ -515,7 +516,7 @@ describe('ScenarioForm Component', () => {
 
       const errorText = wrapper.find('.error-text');
       expect(errorText.exists()).toBe(true);
-      expect(errorText.text()).toContain('総容量が20MBを超えます');
+      expect(errorText.text()).toContain('総容量が15MBを超えます');
     });
   });
 
@@ -541,8 +542,8 @@ describe('ScenarioForm Component', () => {
       globalThis.FileReader = MockFileReader as unknown as typeof FileReader;
 
       try {
-        // Start with 8 existing images
-        const existingImages: StepImage[] = Array(8)
+        // Start with 18 existing images (MAX_IMAGE_COUNT=20, so 2 slots left)
+        const existingImages: StepImage[] = Array(18)
           .fill(null)
           .map((_, i) =>
             createMockStepImage({
@@ -562,7 +563,7 @@ describe('ScenarioForm Component', () => {
         await flushPromises();
 
         // Drop 5 files: 2 invalid (text files) at the start, then 3 valid
-        // With 8 existing, we have 2 slots available
+        // With 18 existing, we have 2 slots available
         // Old behavior: slice(0, 2) would take the 2 text files, both invalid, add 0 images
         // New behavior: skip invalid, add valid ones up to limit (2)
         const mockFiles = [
@@ -586,7 +587,7 @@ describe('ScenarioForm Component', () => {
 
         // Should have added 2 valid images (slots available)
         const previews = wrapper.findAll('.image-preview');
-        expect(previews.length).toBe(10); // 8 existing + 2 new valid
+        expect(previews.length).toBe(20); // 18 existing + 2 new valid
 
         // Should show error for invalid files
         const errorText = wrapper.find('.error-text');

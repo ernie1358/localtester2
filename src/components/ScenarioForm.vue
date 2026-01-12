@@ -126,9 +126,9 @@ const ALLOWED_MIME_TYPES = [
   'image/gif',
   'image/webp',
 ];
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB per file
-const MAX_IMAGE_COUNT = 10; // Maximum number of hint images
-const MAX_TOTAL_SIZE = 20 * 1024 * 1024; // 20MB total for all images
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB per file (Claude API limit)
+const MAX_IMAGE_COUNT = 20; // Maximum number of hint images (Claude API allows up to 100, but 20+ triggers 2000px dimension limit)
+const MAX_TOTAL_SIZE = 15 * 1024 * 1024; // 15MB total for hint images (Claude API has 32MB request limit, reserving space for screenshots)
 
 // Warning state
 const imageLimitWarning = ref('');
@@ -210,11 +210,11 @@ async function processFiles(files: FileList | File[]) {
         continue;
       }
 
-      // Check total size before adding
+      // Check total size before adding (reserving space for screenshots in API requests)
       const currentTotalSize = calculateTotalImageSize();
       if (currentTotalSize + file.size > MAX_TOTAL_SIZE) {
         errors.push(
-          `${file.name}: 追加すると総容量が${Math.round(MAX_TOTAL_SIZE / 1024 / 1024)}MBを超えます`
+          `${file.name}: 追加するとヒント画像の総容量が${Math.round(MAX_TOTAL_SIZE / 1024 / 1024)}MBを超えます（API制限のため）`
         );
         continue;
       }
