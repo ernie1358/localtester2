@@ -302,6 +302,82 @@ describe('runAgentLoop - Hint Image Message Construction', () => {
     }
   });
 
+  it('should normalize image/jpg to image/jpeg for Claude API compatibility', async () => {
+    const { runAgentLoop } = await import('../services/agentLoop');
+
+    const scenario: Scenario = {
+      id: 'test-scenario',
+      title: 'Test Scenario',
+      description: 'Click the submit button',
+      status: 'pending',
+    };
+
+    // Include an image with non-standard 'image/jpg' MIME type
+    const hintImages: StepImage[] = [
+      {
+        id: 'hint-jpg',
+        scenario_id: 'test-scenario',
+        image_data: 'jpgImageData',
+        file_name: 'button.jpg',
+        mime_type: 'image/jpg', // Non-standard MIME type that needs normalization
+        order_index: 0,
+        created_at: '',
+      },
+      {
+        id: 'hint-jpeg',
+        scenario_id: 'test-scenario',
+        image_data: 'jpegImageData',
+        file_name: 'form.jpeg',
+        mime_type: 'image/jpeg', // Standard MIME type
+        order_index: 1,
+        created_at: '',
+      },
+    ];
+
+    const abortController = new AbortController();
+
+    await runAgentLoop({
+      scenario,
+      hintImages,
+      abortSignal: abortController.signal,
+    });
+
+    expect(capturedMessages.length).toBeGreaterThan(0);
+
+    const initialMessage = capturedMessages[0];
+    const content = initialMessage.content;
+
+    if (Array.isArray(content)) {
+      // Find hint image blocks (excluding screenshot)
+      const hintImageBlocks = content.filter(
+        (block) =>
+          block.type === 'image' &&
+          'source' in block &&
+          'data' in block.source &&
+          (block.source.data === 'jpgImageData' || block.source.data === 'jpegImageData')
+      );
+
+      expect(hintImageBlocks.length).toBe(2);
+
+      // Both should have 'image/jpeg' as media_type (image/jpg should be normalized)
+      for (const block of hintImageBlocks) {
+        if ('source' in block && block.source && 'media_type' in block.source) {
+          expect(block.source.media_type).toBe('image/jpeg');
+        }
+      }
+
+      // Verify image/jpg was NOT sent as-is (must be normalized to image/jpeg)
+      const hasNonStandardMime = hintImageBlocks.some(
+        (block) =>
+          'source' in block &&
+          block.source &&
+          'media_type' in block.source &&
+          (block.source.media_type as string) === 'image/jpg'
+      );
+      expect(hasNonStandardMime).toBe(false);
+    }
+  });
+
   it('should preserve hint image order based on array order', async () => {
     const { runAgentLoop } = await import('../services/agentLoop');
 

@@ -165,6 +165,18 @@ export async function runAgentLoop(
 
     // Build initial message content
     type MediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+
+    /**
+     * Normalize MIME type for Claude API compatibility
+     * 'image/jpg' is non-standard; Claude API expects 'image/jpeg'
+     */
+    const normalizeMimeType = (mimeType: string): MediaType => {
+      if (mimeType === 'image/jpg') {
+        return 'image/jpeg';
+      }
+      return mimeType as MediaType;
+    };
+
     const initialMessageContent: Array<
       | { type: 'text'; text: string }
       | { type: 'image'; source: { type: 'base64'; media_type: MediaType; data: string } }
@@ -195,7 +207,7 @@ export async function runAgentLoop(
           type: 'image',
           source: {
             type: 'base64',
-            media_type: hintImage.mime_type as MediaType,
+            media_type: normalizeMimeType(hintImage.mime_type),
             data: hintImage.image_data,
           },
         });
