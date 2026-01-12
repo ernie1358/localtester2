@@ -208,16 +208,16 @@ function recalculateWarning(): void {
   }
 }
 
-// Watch visibleImages changes to recalculate warning
+// Watch visibleImages count changes to recalculate warning
+// Using length instead of deep watch for performance (base64 strings can be large)
 // Skip during processFiles to avoid overwriting individual file warnings
 watch(
-  visibleImages,
+  () => visibleImages.value.length,
   () => {
     if (!isProcessingImages.value) {
       recalculateWarning();
     }
-  },
-  { deep: true }
+  }
 );
 
 // Normalize MIME type (image/jpg -> image/jpeg for Claude API compatibility)
