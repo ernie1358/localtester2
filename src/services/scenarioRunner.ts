@@ -15,7 +15,7 @@ import type {
   ScenarioExecutionResult,
 } from '../types';
 import { mapTestResultStatusToScenarioStatus } from '../types';
-import { validateHintImages, trimHintImagesToLimit } from '../constants/hintImages';
+import { validateHintImages } from '../constants/hintImages';
 
 /** Options for scenario runner */
 export interface ScenarioRunnerOptions {
@@ -141,16 +141,17 @@ export class ScenarioRunner {
           // Validate hint images against API constraints
           const validation = validateHintImages(hintImages);
           if (!validation.valid && validation.error) {
-            // Images exceed API limits - trim to fit and warn
-            this.log(`[Scenario Runner] 警告: ${validation.error}`);
-            const { trimmed, removedCount } = trimHintImagesToLimit(hintImages);
-            if (removedCount > 0) {
-              this.log(`[Scenario Runner] API制限のため${removedCount}枚のヒント画像を除外しました（残り: ${trimmed.length}枚）`);
-              hintImages = trimmed as typeof hintImages;
-            }
+            // Images exceed API limits - stop execution and ask user to reduce images
+            const errorMsg = `ヒント画像がAPI制限を超えています。実行を中止しました。\n${validation.error}\nテストステップを編集して画像を減らすか、5MB以下の画像に置き換えてください。`;
+            this.log(`[Scenario Runner] エラー: ${errorMsg}`);
+            throw new Error(errorMsg);
           }
         }
       } catch (imageError) {
+        // Re-throw validation errors (these should stop execution)
+        if (imageError instanceof Error && imageError.message.includes('API制限を超えています')) {
+          throw imageError;
+        }
         this.log(`[Scenario Runner] ヒント画像の読み込みに失敗しました（実行は継続）: ${imageError instanceof Error ? imageError.message : String(imageError)}`);
       }
 
@@ -320,13 +321,24 @@ export class ScenarioRunner {
           // Validate hint images against API constraints (same as executeScenario)
           const validation = validateHintImages(hintImages);
           if (!validation.valid && validation.error) {
-            // Images exceed API limits - trim to fit and warn
-            this.log(`[Batch Runner] 警告: ${validation.error}`);
-            const { trimmed, removedCount } = trimHintImagesToLimit(hintImages);
-            if (removedCount > 0) {
-              this.log(`[Batch Runner] API制限のため${removedCount}枚のヒント画像を除外しました（残り: ${trimmed.length}枚）`);
-              hintImages = trimmed as typeof hintImages;
+            // Images exceed API limits - stop execution and ask user to reduce images
+            const errorMsg = `ヒント画像がAPI制限を超えています。実行を中止しました。\n${validation.error}\nテストステップを編集して画像を減らすか、5MB以下の画像に置き換えてください。`;
+            this.log(`[Batch Runner] エラー: ${errorMsg}`);
+            // Record failure for this scenario and stop batch execution
+            results.push({
+              scenarioId: scenario.id,
+              title: scenario.title,
+              success: false,
+              error: errorMsg,
+              completedActions: 0,
+              actionHistory: [],
+            });
+            failureCount++;
+            if (this.state.stopOnFailure) {
+              this.log('[Batch Runner] stopOnFailure enabled - stopping');
+              break;
             }
+            continue;
           }
         }
       } catch (imageError) {

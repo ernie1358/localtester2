@@ -61,8 +61,12 @@ const visibleImages = computed(() =>
   images.value.filter((img) => !img.markedForDeletion)
 );
 
-// Initialize images from props
+// Initialize images from props and validate existing images
 function initializeImages() {
+  imageError.value = '';
+  fileWarning.value = '';
+  imageLimitWarning.value = '';
+
   if (props.existingImages && props.existingImages.length > 0) {
     images.value = props.existingImages.map((img) => ({
       existingId: img.id,
@@ -71,12 +75,43 @@ function initializeImages() {
       mimeType: img.mime_type,
       markedForDeletion: false,
     }));
+
+    // Validate existing images for size and MIME type warnings
+    validateExistingImages();
   } else {
     images.value = [];
   }
-  imageError.value = '';
-  fileWarning.value = '';
-  imageLimitWarning.value = '';
+}
+
+// Validate existing images and show warnings for oversized or invalid images
+function validateExistingImages() {
+  const warnings: string[] = [];
+
+  for (const img of images.value) {
+    if (img.markedForDeletion) continue;
+
+    // Check individual file size (base64 * 0.75 ≈ bytes)
+    const imageSize = Math.ceil(img.base64.length * 0.75);
+    if (imageSize > MAX_FILE_SIZE) {
+      const sizeMB = (imageSize / (1024 * 1024)).toFixed(1);
+      warnings.push(`${img.fileName}: ${sizeMB}MBは送信時に除外されます（1枚${UI_MAX_FILE_SIZE_MB}MB以下推奨）`);
+    }
+
+    // Check MIME type
+    if (img.mimeType) {
+      const normalizedMime = img.mimeType === 'image/jpg' ? 'image/jpeg' : img.mimeType;
+      if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(normalizedMime)) {
+        warnings.push(`${img.fileName}: 非対応形式(${img.mimeType})のため送信時に除外されます`);
+      }
+    }
+  }
+
+  if (warnings.length > 0) {
+    fileWarning.value = warnings.join('\n');
+  }
+
+  // Also recalculate API limit warning
+  recalculateWarning();
 }
 
 // Initialize on mount
@@ -162,7 +197,7 @@ function recalculateWarning(): void {
     if (totalSize > MAX_TOTAL_SIZE) {
       limitWarnings.push(`${UI_MAX_TOTAL_SIZE_MB}MB`);
     }
-    imageLimitWarning.value = `※ API制限（${limitWarnings.join('・')}まで）を超えています。送信時に一部の画像が除外されます。`;
+    imageLimitWarning.value = `※ API制限（${limitWarnings.join('・')}まで）を超えています。このままでは実行時にエラーになります。画像を減らすか、5MB以下の画像に置き換えてください。`;
   } else {
     imageLimitWarning.value = '';
   }
@@ -205,7 +240,8 @@ async function fileToBase64(
 
 // Process files (from drop or file input)
 // NOTE: No count/total size limits at save time - all images are saved.
-// API constraints are applied at send time (trimHintImagesToLimit in scenarioRunner.ts)
+// API constraints are validated at run time (validateHintImages in scenarioRunner.ts)
+// If validation fails, execution is stopped and user is asked to reduce images.
 async function processFiles(files: FileList | File[]) {
   imageError.value = '';
   fileWarning.value = '';
@@ -385,7 +421,7 @@ function handleCancel() {
         <label>ヒント画像 <span class="optional-label">（省略可）</span></label>
         <p class="hint-text image-hint">
           クリック対象や探してほしい要素のスクリーンショットをドラッグ&ドロップで追加できます<br />
-          <span class="limit-text">※ 保存は無制限、送信時はAPI制限（{{ MAX_IMAGE_COUNT }}枚・{{ UI_MAX_TOTAL_SIZE_MB }}MBまで）に合わせて自動選別されます</span>
+          <span class="limit-text">※ API制限: 1枚{{ UI_MAX_FILE_SIZE_MB }}MB以下、合計{{ MAX_IMAGE_COUNT }}枚・{{ UI_MAX_TOTAL_SIZE_MB }}MBまで（超過時は実行がブロックされます）</span>
         </p>
         <div
           class="drop-zone"

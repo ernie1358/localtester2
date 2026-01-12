@@ -627,8 +627,8 @@ describe('ScenarioRunner', () => {
     });
   });
 
-  describe('runSelected - Hint Image Validation and Trimming', () => {
-    it('should validate and trim hint images that exceed API limits', async () => {
+  describe('runSelected - Hint Image Validation and Blocking', () => {
+    it('should block execution when hint images exceed API limits', async () => {
       const logs: string[] = [];
 
       // Create 25 small images (exceeds MAX_IMAGE_COUNT of 20)
@@ -665,17 +665,21 @@ describe('ScenarioRunner', () => {
         { id: '1', title: 'Test', description: 'D', order_index: 0, created_at: '', updated_at: '' },
       ];
 
-      await runner.runSelected(['1'], scenarios, {
+      const result = await runner.runSelected(['1'], scenarios, {
         onLog: (msg) => logs.push(msg),
       });
 
-      // Should have warning logs about exceeding limits
-      expect(logs.some((l) => l.includes('20枚を超えています'))).toBe(true);
-      expect(logs.some((l) => l.includes('除外しました'))).toBe(true);
+      // Should have error log about exceeding limits and blocking execution
+      expect(logs.some((l) => l.includes('API制限を超えています'))).toBe(true);
+      expect(logs.some((l) => l.includes('実行を中止しました'))).toBe(true);
 
-      // Verify runAgentLoop was called with trimmed images (20 or fewer)
-      const callArgs = mockRunAgentLoop.mock.calls[0][0];
-      expect(callArgs.hintImages.length).toBeLessThanOrEqual(20);
+      // Scenario should fail (not trimmed anymore - execution is blocked)
+      expect(result.failureCount).toBe(1);
+      expect(result.successCount).toBe(0);
+      expect(result.results[0].error).toContain('API制限を超えています');
+
+      // runAgentLoop should NOT be called (execution was blocked)
+      expect(mockRunAgentLoop).not.toHaveBeenCalled();
 
       await runner.destroy();
     });
@@ -723,7 +727,7 @@ describe('ScenarioRunner', () => {
       await runner.destroy();
     });
 
-    it('should filter out invalid images (oversized or bad MIME) in runSelected', async () => {
+    it('should block execution when images have invalid size or MIME type', async () => {
       const logs: string[] = [];
 
       const base64For6MB = Math.ceil((6 * 1024 * 1024) / 0.75);
@@ -755,17 +759,20 @@ describe('ScenarioRunner', () => {
         { id: '1', title: 'Test', description: 'D', order_index: 0, created_at: '', updated_at: '' },
       ];
 
-      await runner.runSelected(['1'], scenarios, {
+      const result = await runner.runSelected(['1'], scenarios, {
         onLog: (msg) => logs.push(msg),
       });
 
-      // Should have warning about invalid images
-      expect(logs.some((l) => l.includes('警告'))).toBe(true);
-      expect(logs.some((l) => l.includes('除外しました'))).toBe(true);
+      // Should have error about invalid images and blocking execution
+      expect(logs.some((l) => l.includes('API制限を超えています'))).toBe(true);
+      expect(logs.some((l) => l.includes('実行を中止しました'))).toBe(true);
 
-      // Verify runAgentLoop was called with only valid images (2 out of 4)
-      const callArgs = mockRunAgentLoop.mock.calls[0][0];
-      expect(callArgs.hintImages.length).toBe(2);
+      // Scenario should fail (not trimmed anymore - execution is blocked)
+      expect(result.failureCount).toBe(1);
+      expect(result.successCount).toBe(0);
+
+      // runAgentLoop should NOT be called (execution was blocked)
+      expect(mockRunAgentLoop).not.toHaveBeenCalled();
 
       await runner.destroy();
     });
