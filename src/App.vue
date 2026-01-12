@@ -140,12 +140,20 @@ async function handleDeleteScenario() {
 }
 
 async function handleOrderUpdate(newOrder: StoredScenario[]) {
+  // Store previous order for rollback
+  const previousOrder = [...scenarios.value];
+  // Optimistically update UI
   scenarios.value = newOrder;
+
   const orders = newOrder.map((s, i) => ({ id: s.id, orderIndex: i }));
   try {
     await updateScenarioOrders(orders);
   } catch (error) {
     console.error('Failed to update order:', error);
+    // Rollback to previous order on failure
+    scenarios.value = previousOrder;
+    // Show error to user
+    errorMessage.value = `並び替えの保存に失敗しました: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
 

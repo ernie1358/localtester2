@@ -53,10 +53,9 @@ export function mapTestResultStatusToScenarioStatus(
   }
 }
 
-/** Result of scenario parsing */
+/** Result of scenario parsing (from LLM response) */
 export interface ScenarioSplitResult {
   scenarios: Array<{
-    id: string;
     title: string;
     description: string;
   }>;

@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { listen, emit } from '@tauri-apps/api/event';
 import type { BatchExecutionResult, ExecutedAction } from '../types';
+import { toDate } from '../types';
 
 const result = ref<BatchExecutionResult | null>(null);
 
@@ -14,6 +15,10 @@ onMounted(async () => {
   // Signal that the window is ready (handshake)
   await emit('result-window-ready');
 });
+
+function formatExecutedAt(value: Date | string): string {
+  return toDate(value).toLocaleString();
+}
 
 function formatActionHistory(actions: ExecutedAction[]): string {
   return actions
@@ -49,7 +54,7 @@ function formatActionHistory(actions: ExecutedAction[]): string {
           </div>
         </div>
         <p class="executed-at">
-          実行日時: {{ new Date(result.executedAt).toLocaleString() }}
+          実行日時: {{ formatExecutedAt(result.executedAt) }}
         </p>
       </div>
 

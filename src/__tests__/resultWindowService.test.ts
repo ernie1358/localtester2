@@ -3,7 +3,7 @@
  * Tests for result window creation and event communication
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { BatchExecutionResult } from '../types';
 
 // Track WebviewWindow constructor calls
@@ -31,23 +31,39 @@ vi.mock('@tauri-apps/api/webviewWindow', () => ({
   WebviewWindow: MockWebviewWindow,
 }));
 
-// Mock listen
+// Mock listen - store callbacks so tests can trigger them
 const mockUnlisten = vi.fn();
-const mockListen = vi.fn();
+type ListenCallback = (payload: unknown) => void;
+let registeredReadyCallbacks: ListenCallback[] = [];
+
+const mockListen = vi.fn().mockImplementation(async (event: string, callback: ListenCallback) => {
+  if (event === 'result-window-ready') {
+    registeredReadyCallbacks.push(callback);
+  }
+  return mockUnlisten;
+});
 
 vi.mock('@tauri-apps/api/event', () => ({
   listen: mockListen,
 }));
 
+// Helper to trigger ready event
+function triggerReadyEvent() {
+  registeredReadyCallbacks.forEach(cb => cb({}));
+}
+
 describe('ResultWindowService', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     windowConstructorCalls.length = 0;
+    registeredReadyCallbacks = [];
+
+    // Reset module state by re-importing
+    vi.resetModules();
 
     // Setup default mock behaviors
     mockClose.mockResolvedValue(undefined);
     mockEmit.mockResolvedValue(undefined);
-    mockListen.mockResolvedValue(mockUnlisten);
 
     // Mock window events - trigger 'created' immediately
     mockOnce.mockImplementation((event, callback) => {
@@ -57,20 +73,8 @@ describe('ResultWindowService', () => {
     });
   });
 
-  afterEach(() => {
-    vi.resetModules();
-  });
-
   describe('openResultWindow', () => {
     it('should create a new window with correct configuration', async () => {
-      // Setup: trigger ready event
-      mockListen.mockImplementation(async (event, callback) => {
-        if (event === 'result-window-ready') {
-          setTimeout(() => callback({}), 10);
-        }
-        return mockUnlisten;
-      });
-
       const { openResultWindow } = await import('../services/resultWindowService');
 
       const result: BatchExecutionResult = {
@@ -81,7 +85,16 @@ describe('ResultWindowService', () => {
         executedAt: new Date(),
       };
 
-      await openResultWindow(result);
+      // Start opening window
+      const openPromise = openResultWindow(result);
+
+      // Wait for listen to be called, then trigger ready event
+      await vi.waitFor(() => {
+        expect(registeredReadyCallbacks.length).toBeGreaterThan(0);
+      });
+      triggerReadyEvent();
+
+      await openPromise;
 
       // Verify WebviewWindow was called with correct config
       expect(windowConstructorCalls.length).toBeGreaterThanOrEqual(1);
@@ -99,14 +112,6 @@ describe('ResultWindowService', () => {
     });
 
     it('should emit execution-result event with batch result data', async () => {
-      // Setup: trigger ready event
-      mockListen.mockImplementation(async (event, callback) => {
-        if (event === 'result-window-ready') {
-          setTimeout(() => callback({}), 10);
-        }
-        return mockUnlisten;
-      });
-
       const { openResultWindow } = await import('../services/resultWindowService');
 
       const result: BatchExecutionResult = {
@@ -121,15 +126,21 @@ describe('ResultWindowService', () => {
         executedAt: new Date(),
       };
 
-      await openResultWindow(result);
+      const openPromise = openResultWindow(result);
+
+      await vi.waitFor(() => {
+        expect(registeredReadyCallbacks.length).toBeGreaterThan(0);
+      });
+      triggerReadyEvent();
+
+      await openPromise;
 
       // Verify emit was called with correct event and data
       expect(mockEmit).toHaveBeenCalledWith('execution-result', result);
     });
 
-    it('should handle handshake timeout gracefully', async () => {
-      // Don't trigger ready event - let it timeout
-      mockListen.mockResolvedValue(mockUnlisten);
+    it('should handle handshake timeout gracefully and send result when ready arrives later', async () => {
+      vi.useFakeTimers();
 
       const { openResultWindow } = await import('../services/resultWindowService');
 
@@ -141,32 +152,35 @@ describe('ResultWindowService', () => {
         executedAt: new Date(),
       };
 
-      // This should complete even without ready signal (5s timeout in implementation)
-      // For test, we use vi.useFakeTimers
-      vi.useFakeTimers();
+      const openPromise = openResultWindow(result);
 
-      const promise = openResultWindow(result);
+      // Wait for listen to be set up
+      await vi.waitFor(() => {
+        expect(registeredReadyCallbacks.length).toBeGreaterThan(0);
+      });
 
-      // Advance timers to trigger timeout
+      // Advance timers to trigger timeout (5 seconds)
       await vi.advanceTimersByTimeAsync(5100);
 
-      await promise;
+      await openPromise;
 
-      // Should still emit the result
-      expect(mockEmit).toHaveBeenCalledWith('execution-result', result);
+      // After timeout, result should be buffered (not emitted yet because ready wasn't received)
+      expect(mockEmit).not.toHaveBeenCalled();
 
+      // Switch back to real timers for the async callback to work properly
       vi.useRealTimers();
+
+      // Now simulate the ready event arriving after timeout
+      triggerReadyEvent();
+
+      // Wait for the async callback to complete
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Now the buffered result should be emitted
+      expect(mockEmit).toHaveBeenCalledWith('execution-result', result);
     });
 
     it('should close existing window before opening new one', async () => {
-      // Setup: trigger ready event
-      mockListen.mockImplementation(async (event, callback) => {
-        if (event === 'result-window-ready') {
-          setTimeout(() => callback({}), 10);
-        }
-        return mockUnlisten;
-      });
-
       const { openResultWindow } = await import('../services/resultWindowService');
 
       const result: BatchExecutionResult = {
@@ -178,13 +192,24 @@ describe('ResultWindowService', () => {
       };
 
       // Open first window
-      await openResultWindow(result);
+      const firstPromise = openResultWindow(result);
+      await vi.waitFor(() => {
+        expect(registeredReadyCallbacks.length).toBeGreaterThan(0);
+      });
+      triggerReadyEvent();
+      await firstPromise;
 
-      // Reset close mock
+      // Reset for second open
       mockClose.mockClear();
+      registeredReadyCallbacks = [];
 
       // Open second window
-      await openResultWindow(result);
+      const secondPromise = openResultWindow(result);
+      await vi.waitFor(() => {
+        expect(registeredReadyCallbacks.length).toBeGreaterThan(0);
+      });
+      triggerReadyEvent();
+      await secondPromise;
 
       // Should have attempted to close the first window
       expect(mockClose).toHaveBeenCalled();
@@ -193,14 +218,6 @@ describe('ResultWindowService', () => {
 
   describe('closeResultWindow', () => {
     it('should close the window if open', async () => {
-      // Setup: trigger ready event
-      mockListen.mockImplementation(async (event, callback) => {
-        if (event === 'result-window-ready') {
-          setTimeout(() => callback({}), 10);
-        }
-        return mockUnlisten;
-      });
-
       const { openResultWindow, closeResultWindow } = await import('../services/resultWindowService');
 
       const result: BatchExecutionResult = {
@@ -211,7 +228,13 @@ describe('ResultWindowService', () => {
         executedAt: new Date(),
       };
 
-      await openResultWindow(result);
+      const openPromise = openResultWindow(result);
+      await vi.waitFor(() => {
+        expect(registeredReadyCallbacks.length).toBeGreaterThan(0);
+      });
+      triggerReadyEvent();
+      await openPromise;
+
       mockClose.mockClear();
 
       await closeResultWindow();
@@ -220,14 +243,6 @@ describe('ResultWindowService', () => {
     });
 
     it('should handle close error gracefully', async () => {
-      // Setup: trigger ready event
-      mockListen.mockImplementation(async (event, callback) => {
-        if (event === 'result-window-ready') {
-          setTimeout(() => callback({}), 10);
-        }
-        return mockUnlisten;
-      });
-
       const { openResultWindow, closeResultWindow } = await import('../services/resultWindowService');
 
       const result: BatchExecutionResult = {
@@ -238,7 +253,12 @@ describe('ResultWindowService', () => {
         executedAt: new Date(),
       };
 
-      await openResultWindow(result);
+      const openPromise = openResultWindow(result);
+      await vi.waitFor(() => {
+        expect(registeredReadyCallbacks.length).toBeGreaterThan(0);
+      });
+      triggerReadyEvent();
+      await openPromise;
 
       // Make close throw an error (window already closed)
       mockClose.mockRejectedValue(new Error('Window already closed'));

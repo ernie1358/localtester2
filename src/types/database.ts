@@ -2,13 +2,17 @@
  * Database type definitions for scenario management
  */
 
-/** Executed action record for tracking action history */
+/**
+ * Executed action record for tracking action history
+ * Note: timestamp is Date in memory but becomes string when serialized via Tauri events
+ */
 export interface ExecutedAction {
   index: number;
   action: string;
   description: string;
   success: boolean;
-  timestamp: Date;
+  /** Date object in memory, ISO string when serialized */
+  timestamp: Date | string;
 }
 
 /** Stored scenario in SQLite database */
@@ -39,11 +43,23 @@ export interface ScenarioExecutionResult {
   lastSuccessfulAction?: string;
 }
 
-/** Result of batch scenario execution */
+/**
+ * Result of batch scenario execution
+ * Note: executedAt is Date in memory but becomes string when serialized via Tauri events
+ */
 export interface BatchExecutionResult {
   totalScenarios: number;
   successCount: number;
   failureCount: number;
   results: ScenarioExecutionResult[];
-  executedAt: Date;
+  /** Date object in memory, ISO string when serialized */
+  executedAt: Date | string;
+}
+
+/**
+ * Convert a Date or string to Date object
+ * Useful for handling serialized dates from Tauri events
+ */
+export function toDate(value: Date | string): Date {
+  return value instanceof Date ? value : new Date(value);
 }
