@@ -130,19 +130,32 @@ async function handleSaveScenario(
       // Create new scenario
       const newScenario = await createScenario(title, description);
       scenarioId = newScenario.id;
+      // Store the new scenario ID to allow retry as update if image save fails
+      editingScenario.value = newScenario;
       addLog(`テストステップを登録しました: ${title}`);
     }
 
-    // 2. Process image diff
+    // 2. Process image diff with error tracking
+    let imageErrors: string[] = [];
     for (const image of images) {
-      if (image.existingId && image.markedForDeletion) {
-        // Delete existing image marked for deletion
-        await deleteStepImage(image.existingId);
-      } else if (!image.existingId && !image.markedForDeletion) {
-        // Add new image
-        await addStepImage(scenarioId, image.base64, image.fileName, image.mimeType);
+      try {
+        if (image.existingId && image.markedForDeletion) {
+          // Delete existing image marked for deletion
+          await deleteStepImage(image.existingId);
+        } else if (!image.existingId && !image.markedForDeletion) {
+          // Add new image
+          await addStepImage(scenarioId, image.base64, image.fileName, image.mimeType);
+        }
+        // Existing images without deletion flag are kept (no action needed)
+      } catch (imgError) {
+        const errorMsg = imgError instanceof Error ? imgError.message : String(imgError);
+        imageErrors.push(`${image.fileName}: ${errorMsg}`);
       }
-      // Existing images without deletion flag are kept (no action needed)
+    }
+
+    // Report image errors but don't fail the entire save
+    if (imageErrors.length > 0) {
+      addLog(`警告: 一部の画像保存に失敗しました: ${imageErrors.join(', ')}`);
     }
 
     await loadScenarios();

@@ -130,10 +130,15 @@ export class ScenarioRunner {
     this.log(`[Scenario Runner] Starting scenario: ${scenario.title}`);
 
     try {
-      // Load hint images for this scenario
-      const hintImages = await getStepImages(scenario.id);
-      if (hintImages.length > 0) {
-        this.log(`[Scenario Runner] ${hintImages.length}枚のヒント画像を読み込みました`);
+      // Load hint images for this scenario (optional - continue without images on failure)
+      let hintImages: import('../types').StepImage[] = [];
+      try {
+        hintImages = await getStepImages(scenario.id);
+        if (hintImages.length > 0) {
+          this.log(`[Scenario Runner] ${hintImages.length}枚のヒント画像を読み込みました`);
+        }
+      } catch (imageError) {
+        this.log(`[Scenario Runner] ヒント画像の読み込みに失敗しました（実行は継続）: ${imageError instanceof Error ? imageError.message : String(imageError)}`);
       }
 
       const result: AgentLoopResult = await runAgentLoop({
@@ -292,10 +297,15 @@ export class ScenarioRunner {
         `[Batch Runner] テストステップ開始 (${i + 1}/${orderedScenarioIds.length}): ${scenario.title}`
       );
 
-      // Load hint images for this scenario
-      const hintImages = await getStepImages(scenario.id);
-      if (hintImages.length > 0) {
-        this.log(`[Batch Runner] ${hintImages.length}枚のヒント画像を読み込みました`);
+      // Load hint images for this scenario (optional - continue without images on failure)
+      let hintImages: import('../types').StepImage[] = [];
+      try {
+        hintImages = await getStepImages(scenario.id);
+        if (hintImages.length > 0) {
+          this.log(`[Batch Runner] ${hintImages.length}枚のヒント画像を読み込みました`);
+        }
+      } catch (imageError) {
+        this.log(`[Batch Runner] ヒント画像の読み込みに失敗しました（実行は継続）: ${imageError instanceof Error ? imageError.message : String(imageError)}`);
       }
 
       // Execute scenario

@@ -522,6 +522,111 @@ describe('ScenarioRunner', () => {
     });
   });
 
+  describe('runSelected - Hint Image Loading Failure Handling', () => {
+    it('should continue execution with empty hintImages when getStepImages fails', async () => {
+      const logs: string[] = [];
+
+      // First call throws error, second call succeeds
+      let callCount = 0;
+      mockGetStepImages.mockImplementation(async () => {
+        callCount++;
+        if (callCount === 1) {
+          throw new Error('Database connection failed');
+        }
+        return [{ id: 'img1', scenario_id: '2', image_data: 'data', file_name: 'hint.png', mime_type: 'image/png', order_index: 0, created_at: '' }];
+      });
+
+      mockRunAgentLoop.mockResolvedValue({
+        success: true,
+        executedActions: [],
+        iterations: 1,
+        testResult: { status: 'success' },
+      });
+
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === 'is_stop_requested') return false;
+        return undefined;
+      });
+
+      const { ScenarioRunner } = await import('../services/scenarioRunner');
+      const runner = new ScenarioRunner();
+
+      const scenarios: StoredScenario[] = [
+        { id: '1', title: 'Scenario 1', description: 'D1', order_index: 0, created_at: '', updated_at: '' },
+        { id: '2', title: 'Scenario 2', description: 'D2', order_index: 1, created_at: '', updated_at: '' },
+      ];
+
+      const result = await runner.runSelected(['1', '2'], scenarios, {
+        onLog: (msg) => logs.push(msg),
+      });
+
+      // Both scenarios should execute successfully
+      expect(result.successCount).toBe(2);
+      expect(result.failureCount).toBe(0);
+
+      // First call should have empty hintImages due to error
+      expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          hintImages: [],
+        })
+      );
+
+      // Second call should have the hint images
+      expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          hintImages: expect.arrayContaining([
+            expect.objectContaining({ id: 'img1' }),
+          ]),
+        })
+      );
+
+      // Warning log should be present
+      expect(logs.some((l) => l.includes('ヒント画像の読み込みに失敗しました'))).toBe(true);
+
+      await runner.destroy();
+    });
+
+    it('should not fail scenario execution when all hint image loads fail', async () => {
+      mockGetStepImages.mockRejectedValue(new Error('Storage unavailable'));
+
+      mockRunAgentLoop.mockResolvedValue({
+        success: true,
+        executedActions: [],
+        iterations: 1,
+        testResult: { status: 'success' },
+      });
+
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === 'is_stop_requested') return false;
+        return undefined;
+      });
+
+      const { ScenarioRunner } = await import('../services/scenarioRunner');
+      const runner = new ScenarioRunner();
+
+      const scenarios: StoredScenario[] = [
+        { id: '1', title: 'Test', description: 'D', order_index: 0, created_at: '', updated_at: '' },
+      ];
+
+      const result = await runner.runSelected(['1'], scenarios);
+
+      // Scenario should still succeed (hint images are optional)
+      expect(result.successCount).toBe(1);
+      expect(result.failureCount).toBe(0);
+
+      // runAgentLoop should be called with empty hintImages
+      expect(mockRunAgentLoop).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hintImages: [],
+        })
+      );
+
+      await runner.destroy();
+    });
+  });
+
   describe('run - Hint Images for executeScenario path', () => {
     it('should load and pass hint images when using run() method', async () => {
       const mockHintImages = [
