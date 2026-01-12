@@ -94,15 +94,18 @@ describe('Scenario Database Service', () => {
 
     it('should truncate auto-generated title at 30 characters with ellipsis', async () => {
       mockSelect.mockResolvedValueOnce([{ max_order: null }]);
-      mockExecute.mockResolvedValueOnce(undefined);
+      mockExecute.mockResolvedValueOnce(undefined); // PRAGMA (if first call)
+      mockExecute.mockResolvedValueOnce(undefined); // INSERT
 
       const { createScenario } = await import('../services/scenarioDatabase');
       const longDescription = 'This is a very long description that should be truncated';
       await createScenario('', longDescription);
 
       // Verify the first line is truncated to 30 chars + '...'
-      const insertCall = mockExecute.mock.calls[0];
-      expect(insertCall[1][1]).toBe('This is a very long descriptio...');
+      // Find the INSERT call (not the PRAGMA call)
+      const insertCall = mockExecute.mock.calls.find(call => call[0].startsWith('INSERT'));
+      expect(insertCall).toBeDefined();
+      expect(insertCall![1][1]).toBe('This is a very long descriptio...');
     });
 
     it('should not add ellipsis for short descriptions', async () => {
@@ -158,8 +161,9 @@ describe('Scenario Database Service', () => {
 
   describe('updateScenarioOrders', () => {
     it('should update order_index for multiple scenarios within a transaction', async () => {
-      // BEGIN + 3 updates + COMMIT = 5 calls
+      // PRAGMA + BEGIN + 3 updates + COMMIT = 6 calls
       mockExecute
+        .mockResolvedValueOnce(undefined) // PRAGMA foreign_keys = ON
         .mockResolvedValueOnce(undefined) // BEGIN
         .mockResolvedValueOnce(undefined) // UPDATE 1
         .mockResolvedValueOnce(undefined) // UPDATE 2
@@ -173,24 +177,25 @@ describe('Scenario Database Service', () => {
         { id: 'c', orderIndex: 1 },
       ]);
 
-      expect(mockExecute).toHaveBeenCalledTimes(5);
-      expect(mockExecute).toHaveBeenNthCalledWith(1, 'BEGIN TRANSACTION');
+      expect(mockExecute).toHaveBeenCalledTimes(6);
+      expect(mockExecute).toHaveBeenNthCalledWith(1, 'PRAGMA foreign_keys = ON');
+      expect(mockExecute).toHaveBeenNthCalledWith(2, 'BEGIN TRANSACTION');
       expect(mockExecute).toHaveBeenNthCalledWith(
-        2,
+        3,
         'UPDATE scenarios SET order_index = ?, updated_at = datetime("now") WHERE id = ?',
         [2, 'a']
       );
       expect(mockExecute).toHaveBeenNthCalledWith(
-        3,
+        4,
         'UPDATE scenarios SET order_index = ?, updated_at = datetime("now") WHERE id = ?',
         [0, 'b']
       );
       expect(mockExecute).toHaveBeenNthCalledWith(
-        4,
+        5,
         'UPDATE scenarios SET order_index = ?, updated_at = datetime("now") WHERE id = ?',
         [1, 'c']
       );
-      expect(mockExecute).toHaveBeenNthCalledWith(5, 'COMMIT');
+      expect(mockExecute).toHaveBeenNthCalledWith(6, 'COMMIT');
     });
 
     it('should handle empty orders array without starting transaction', async () => {
@@ -202,6 +207,7 @@ describe('Scenario Database Service', () => {
 
     it('should rollback transaction on error', async () => {
       mockExecute
+        .mockResolvedValueOnce(undefined) // PRAGMA foreign_keys = ON
         .mockResolvedValueOnce(undefined) // BEGIN
         .mockResolvedValueOnce(undefined) // UPDATE 1 success
         .mockRejectedValueOnce(new Error('DB error')) // UPDATE 2 fails
@@ -217,7 +223,7 @@ describe('Scenario Database Service', () => {
       ).rejects.toThrow('DB error');
 
       // Should have called ROLLBACK
-      expect(mockExecute).toHaveBeenNthCalledWith(4, 'ROLLBACK');
+      expect(mockExecute).toHaveBeenNthCalledWith(5, 'ROLLBACK');
     });
   });
 
@@ -343,7 +349,9 @@ describe('Scenario Database Service', () => {
 
   describe('updateStepImageOrders', () => {
     it('should update order_index for multiple images within a transaction', async () => {
+      // PRAGMA + BEGIN + 2 updates + COMMIT = 5 calls
       mockExecute
+        .mockResolvedValueOnce(undefined) // PRAGMA foreign_keys = ON
         .mockResolvedValueOnce(undefined) // BEGIN
         .mockResolvedValueOnce(undefined) // UPDATE 1
         .mockResolvedValueOnce(undefined) // UPDATE 2
@@ -355,19 +363,20 @@ describe('Scenario Database Service', () => {
         { id: 'img2', orderIndex: 0 },
       ]);
 
-      expect(mockExecute).toHaveBeenCalledTimes(4);
-      expect(mockExecute).toHaveBeenNthCalledWith(1, 'BEGIN TRANSACTION');
+      expect(mockExecute).toHaveBeenCalledTimes(5);
+      expect(mockExecute).toHaveBeenNthCalledWith(1, 'PRAGMA foreign_keys = ON');
+      expect(mockExecute).toHaveBeenNthCalledWith(2, 'BEGIN TRANSACTION');
       expect(mockExecute).toHaveBeenNthCalledWith(
-        2,
+        3,
         'UPDATE step_images SET order_index = ? WHERE id = ?',
         [1, 'img1']
       );
       expect(mockExecute).toHaveBeenNthCalledWith(
-        3,
+        4,
         'UPDATE step_images SET order_index = ? WHERE id = ?',
         [0, 'img2']
       );
-      expect(mockExecute).toHaveBeenNthCalledWith(4, 'COMMIT');
+      expect(mockExecute).toHaveBeenNthCalledWith(5, 'COMMIT');
     });
 
     it('should handle empty orders array without starting transaction', async () => {
@@ -379,6 +388,7 @@ describe('Scenario Database Service', () => {
 
     it('should rollback transaction on error', async () => {
       mockExecute
+        .mockResolvedValueOnce(undefined) // PRAGMA foreign_keys = ON
         .mockResolvedValueOnce(undefined) // BEGIN
         .mockRejectedValueOnce(new Error('DB error')) // UPDATE 1 fails
         .mockResolvedValueOnce(undefined); // ROLLBACK
@@ -391,7 +401,7 @@ describe('Scenario Database Service', () => {
         ])
       ).rejects.toThrow('DB error');
 
-      expect(mockExecute).toHaveBeenNthCalledWith(3, 'ROLLBACK');
+      expect(mockExecute).toHaveBeenNthCalledWith(4, 'ROLLBACK');
     });
   });
 });

@@ -112,15 +112,20 @@ watch(
   { deep: true }
 );
 
-// Allowed image types
+// Allowed image types (image/jpg is normalized to image/jpeg)
 const ALLOWED_MIME_TYPES = [
   'image/png',
   'image/jpeg',
-  'image/jpg',
+  'image/jpg', // Non-standard but accepted, will be normalized to image/jpeg
   'image/gif',
   'image/webp',
 ];
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+
+// Normalize MIME type (image/jpg -> image/jpeg for Claude API compatibility)
+function normalizeMimeType(mimeType: string): string {
+  return mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+}
 
 // Validate image file
 function validateImageFile(file: File): string | null {
@@ -168,7 +173,7 @@ async function processFiles(files: FileList | File[]) {
       images.value.push({
         base64,
         fileName: file.name,
-        mimeType,
+        mimeType: normalizeMimeType(mimeType),
         markedForDeletion: false,
       });
     } catch (error) {

@@ -9,10 +9,13 @@ let db: Database | null = null;
 
 /**
  * Get or create database connection
+ * Enables foreign key constraints on connection
  */
 export async function getDatabase(): Promise<Database> {
   if (!db) {
     db = await Database.load('sqlite:xenotester.db');
+    // Enable foreign key constraints (required for ON DELETE CASCADE to work)
+    await db.execute('PRAGMA foreign_keys = ON');
   }
   return db;
 }

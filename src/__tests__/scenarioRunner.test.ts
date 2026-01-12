@@ -383,4 +383,142 @@ describe('ScenarioRunner', () => {
       await runner.destroy();
     });
   });
+
+  describe('runSelected - Hint Images', () => {
+    it('should call getStepImages for each scenario and pass hintImages to runAgentLoop', async () => {
+      const mockHintImages = [
+        { id: 'img1', scenario_id: '1', image_data: 'base64data1', file_name: 'hint1.png', mime_type: 'image/png', order_index: 0, created_at: '' },
+        { id: 'img2', scenario_id: '1', image_data: 'base64data2', file_name: 'hint2.png', mime_type: 'image/jpeg', order_index: 1, created_at: '' },
+      ];
+
+      mockGetStepImages.mockResolvedValue(mockHintImages);
+
+      mockRunAgentLoop.mockResolvedValue({
+        success: true,
+        executedActions: [],
+        iterations: 1,
+        testResult: { status: 'success' },
+      });
+
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === 'is_stop_requested') return false;
+        return undefined;
+      });
+
+      const { ScenarioRunner } = await import('../services/scenarioRunner');
+      const runner = new ScenarioRunner();
+
+      const scenarios: StoredScenario[] = [
+        { id: '1', title: 'Scenario with hints', description: 'D', order_index: 0, created_at: '', updated_at: '' },
+      ];
+
+      await runner.runSelected(['1'], scenarios);
+
+      // Verify getStepImages was called with correct scenario ID
+      expect(mockGetStepImages).toHaveBeenCalledWith('1');
+
+      // Verify runAgentLoop was called with hintImages
+      expect(mockRunAgentLoop).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hintImages: mockHintImages,
+        })
+      );
+
+      await runner.destroy();
+    });
+
+    it('should pass empty array when no hint images exist', async () => {
+      mockGetStepImages.mockResolvedValue([]);
+
+      mockRunAgentLoop.mockResolvedValue({
+        success: true,
+        executedActions: [],
+        iterations: 1,
+        testResult: { status: 'success' },
+      });
+
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === 'is_stop_requested') return false;
+        return undefined;
+      });
+
+      const { ScenarioRunner } = await import('../services/scenarioRunner');
+      const runner = new ScenarioRunner();
+
+      const scenarios: StoredScenario[] = [
+        { id: '1', title: 'Scenario without hints', description: 'D', order_index: 0, created_at: '', updated_at: '' },
+      ];
+
+      await runner.runSelected(['1'], scenarios);
+
+      // Verify runAgentLoop was called with empty hintImages array
+      expect(mockRunAgentLoop).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hintImages: [],
+        })
+      );
+
+      await runner.destroy();
+    });
+
+    it('should load hint images for each scenario independently', async () => {
+      const hintImagesScenario1 = [
+        { id: 'img1', scenario_id: '1', image_data: 'data1', file_name: 'hint1.png', mime_type: 'image/png', order_index: 0, created_at: '' },
+      ];
+      const hintImagesScenario2 = [
+        { id: 'img2', scenario_id: '2', image_data: 'data2', file_name: 'hint2.png', mime_type: 'image/png', order_index: 0, created_at: '' },
+        { id: 'img3', scenario_id: '2', image_data: 'data3', file_name: 'hint3.png', mime_type: 'image/png', order_index: 1, created_at: '' },
+      ];
+
+      mockGetStepImages.mockImplementation(async (scenarioId: string) => {
+        if (scenarioId === '1') return hintImagesScenario1;
+        if (scenarioId === '2') return hintImagesScenario2;
+        return [];
+      });
+
+      mockRunAgentLoop.mockResolvedValue({
+        success: true,
+        executedActions: [],
+        iterations: 1,
+        testResult: { status: 'success' },
+      });
+
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === 'is_stop_requested') return false;
+        return undefined;
+      });
+
+      const { ScenarioRunner } = await import('../services/scenarioRunner');
+      const runner = new ScenarioRunner();
+
+      const scenarios: StoredScenario[] = [
+        { id: '1', title: 'Scenario 1', description: 'D1', order_index: 0, created_at: '', updated_at: '' },
+        { id: '2', title: 'Scenario 2', description: 'D2', order_index: 1, created_at: '', updated_at: '' },
+      ];
+
+      await runner.runSelected(['1', '2'], scenarios);
+
+      // Verify getStepImages was called for each scenario
+      expect(mockGetStepImages).toHaveBeenCalledWith('1');
+      expect(mockGetStepImages).toHaveBeenCalledWith('2');
+
+      // Verify first call to runAgentLoop had scenario 1's hint images
+      expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          hintImages: hintImagesScenario1,
+        })
+      );
+
+      // Verify second call to runAgentLoop had scenario 2's hint images
+      expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          hintImages: hintImagesScenario2,
+        })
+      );
+
+      await runner.destroy();
+    });
+  });
 });
