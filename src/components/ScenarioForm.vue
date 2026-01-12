@@ -51,9 +51,15 @@ watch(
 watch(
   () => props.visible,
   (newVal) => {
-    if (!newVal) {
-      title.value = '';
-      description.value = '';
+    if (newVal) {
+      // Re-initialize from props.scenario when becoming visible
+      if (props.scenario) {
+        title.value = props.scenario.title;
+        description.value = props.scenario.description;
+      } else {
+        title.value = '';
+        description.value = '';
+      }
     }
   }
 );
