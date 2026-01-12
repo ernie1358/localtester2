@@ -136,7 +136,7 @@ async function handleSaveScenario(
     }
 
     // 2. Process image diff with error tracking
-    let imageErrors: string[] = [];
+    const imageErrors: string[] = [];
     for (const image of images) {
       try {
         if (image.existingId && image.markedForDeletion) {
@@ -153,9 +153,15 @@ async function handleSaveScenario(
       }
     }
 
-    // Report image errors but don't fail the entire save
+    // If image errors occurred, show error and don't close the modal
     if (imageErrors.length > 0) {
-      addLog(`警告: 一部の画像保存に失敗しました: ${imageErrors.join(', ')}`);
+      const errorMsg = `画像の保存に失敗しました:\n${imageErrors.join('\n')}\n\nテストステップ自体は保存されています。再度保存を試すか、画像を削除してください。`;
+      errorMessage.value = errorMsg;
+      addLog(`エラー: 一部の画像保存に失敗しました: ${imageErrors.join(', ')}`);
+      // Reload images to reflect current state (partially saved images)
+      editingScenarioImages.value = await getStepImages(scenarioId);
+      // Don't close the modal - let user retry or remove problematic images
+      return;
     }
 
     await loadScenarios();

@@ -354,7 +354,8 @@ function handleCancel() {
       <div class="form-group">
         <label>ヒント画像 <span class="optional-label">（省略可）</span></label>
         <p class="hint-text image-hint">
-          クリック対象や探してほしい要素のスクリーンショットをドラッグ&ドロップで追加できます
+          クリック対象や探してほしい要素のスクリーンショットをドラッグ&ドロップで追加できます<br />
+          <span class="limit-text">（最大{{ MAX_IMAGE_COUNT }}枚、1枚{{ Math.round(MAX_FILE_SIZE / 1024 / 1024) }}MB以下、合計{{ Math.round(MAX_TOTAL_SIZE / 1024 / 1024) }}MB以下）</span>
         </p>
         <div
           class="drop-zone"
@@ -482,6 +483,15 @@ function handleCancel() {
 }
 .image-hint {
   margin-bottom: 8px;
+}
+.limit-text {
+  color: #666;
+  font-size: 11px;
+}
+@media (prefers-color-scheme: dark) {
+  .limit-text {
+    color: #999;
+  }
 }
 .form-group input,
 .form-group textarea {
