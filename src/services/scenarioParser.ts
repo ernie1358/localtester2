@@ -15,7 +15,6 @@ const SCENARIO_SPLIT_PROMPT = `
 {
   "scenarios": [
     {
-      "id": 1,
       "title": "シナリオのタイトル（短い説明）",
       "description": "シナリオの詳細な指示内容"
     }

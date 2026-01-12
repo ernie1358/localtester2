@@ -101,16 +101,28 @@ export async function deleteScenario(id: string): Promise<void> {
 
 /**
  * Update scenario orders (for drag & drop reordering)
+ * Uses transaction to ensure atomic updates
  */
 export async function updateScenarioOrders(
   orders: { id: string; orderIndex: number }[]
 ): Promise<void> {
+  if (orders.length === 0) return;
+
   const database = await getDatabase();
-  for (const order of orders) {
-    await database.execute(
-      'UPDATE scenarios SET order_index = ?, updated_at = datetime("now") WHERE id = ?',
-      [order.orderIndex, order.id]
-    );
+
+  // Use transaction for atomic update
+  await database.execute('BEGIN TRANSACTION');
+  try {
+    for (const order of orders) {
+      await database.execute(
+        'UPDATE scenarios SET order_index = ?, updated_at = datetime("now") WHERE id = ?',
+        [order.orderIndex, order.id]
+      );
+    }
+    await database.execute('COMMIT');
+  } catch (error) {
+    await database.execute('ROLLBACK');
+    throw error;
   }
 }
 

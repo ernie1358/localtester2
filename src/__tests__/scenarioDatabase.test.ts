@@ -157,11 +157,14 @@ describe('Scenario Database Service', () => {
   });
 
   describe('updateScenarioOrders', () => {
-    it('should update order_index for multiple scenarios', async () => {
+    it('should update order_index for multiple scenarios within a transaction', async () => {
+      // BEGIN + 3 updates + COMMIT = 5 calls
       mockExecute
-        .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce(undefined);
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce(undefined) // UPDATE 1
+        .mockResolvedValueOnce(undefined) // UPDATE 2
+        .mockResolvedValueOnce(undefined) // UPDATE 3
+        .mockResolvedValueOnce(undefined); // COMMIT
 
       const { updateScenarioOrders } = await import('../services/scenarioDatabase');
       await updateScenarioOrders([
@@ -170,29 +173,51 @@ describe('Scenario Database Service', () => {
         { id: 'c', orderIndex: 1 },
       ]);
 
-      expect(mockExecute).toHaveBeenCalledTimes(3);
+      expect(mockExecute).toHaveBeenCalledTimes(5);
+      expect(mockExecute).toHaveBeenNthCalledWith(1, 'BEGIN TRANSACTION');
       expect(mockExecute).toHaveBeenNthCalledWith(
-        1,
+        2,
         'UPDATE scenarios SET order_index = ?, updated_at = datetime("now") WHERE id = ?',
         [2, 'a']
       );
       expect(mockExecute).toHaveBeenNthCalledWith(
-        2,
+        3,
         'UPDATE scenarios SET order_index = ?, updated_at = datetime("now") WHERE id = ?',
         [0, 'b']
       );
       expect(mockExecute).toHaveBeenNthCalledWith(
-        3,
+        4,
         'UPDATE scenarios SET order_index = ?, updated_at = datetime("now") WHERE id = ?',
         [1, 'c']
       );
+      expect(mockExecute).toHaveBeenNthCalledWith(5, 'COMMIT');
     });
 
-    it('should handle empty orders array', async () => {
+    it('should handle empty orders array without starting transaction', async () => {
       const { updateScenarioOrders } = await import('../services/scenarioDatabase');
       await updateScenarioOrders([]);
 
       expect(mockExecute).not.toHaveBeenCalled();
+    });
+
+    it('should rollback transaction on error', async () => {
+      mockExecute
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce(undefined) // UPDATE 1 success
+        .mockRejectedValueOnce(new Error('DB error')) // UPDATE 2 fails
+        .mockResolvedValueOnce(undefined); // ROLLBACK
+
+      const { updateScenarioOrders } = await import('../services/scenarioDatabase');
+
+      await expect(
+        updateScenarioOrders([
+          { id: 'a', orderIndex: 0 },
+          { id: 'b', orderIndex: 1 },
+        ])
+      ).rejects.toThrow('DB error');
+
+      // Should have called ROLLBACK
+      expect(mockExecute).toHaveBeenNthCalledWith(4, 'ROLLBACK');
     });
   });
 
