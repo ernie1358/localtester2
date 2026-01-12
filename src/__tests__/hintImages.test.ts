@@ -21,9 +21,10 @@ describe('hintImages constants', () => {
 });
 
 describe('validateHintImages', () => {
-  // Helper to create a mock image with specified base64 size
-  const createMockImage = (base64Length: number) => ({
+  // Helper to create a mock image with specified base64 size and optional MIME type
+  const createMockImage = (base64Length: number, mimeType?: string) => ({
     image_data: 'x'.repeat(base64Length),
+    ...(mimeType && { mime_type: mimeType }),
   });
 
   it('should return valid for empty array', () => {
@@ -52,12 +53,12 @@ describe('validateHintImages', () => {
   });
 
   it('should return error when total size exceeds MAX_TOTAL_SIZE', () => {
-    // Create images that exceed 15MB total
-    // base64 length * 0.75 ≈ bytes, so for 15MB we need ~20MB of base64
-    const base64For5MB = Math.ceil((5 * 1024 * 1024) / 0.75);
+    // Create images that individually are within 5MB limit but together exceed 15MB total
+    // Use ~4MB per image (under 5MB limit) × 5 = 20MB total (exceeds 15MB)
+    const base64For4MB = Math.ceil((4 * 1024 * 1024) / 0.75);
     const images = Array(5)
       .fill(null)
-      .map(() => createMockImage(base64For5MB)); // 5 images × 5MB = 25MB
+      .map(() => createMockImage(base64For4MB)); // 5 images × 4MB = 20MB > 15MB
     const result = validateHintImages(images);
     expect(result.valid).toBe(false);
     expect(result.error).toContain('15MBを超えています');
@@ -70,11 +71,47 @@ describe('validateHintImages', () => {
     const result = validateHintImages(images);
     expect(result.valid).toBe(true);
   });
+
+  it('should return error when individual image exceeds MAX_FILE_SIZE', () => {
+    // Create an image larger than 5MB (base64 * 0.75 ≈ bytes)
+    const base64For6MB = Math.ceil((6 * 1024 * 1024) / 0.75);
+    const images = [createMockImage(base64For6MB, 'image/png')];
+    const result = validateHintImages(images);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('5MBを超えています');
+  });
+
+  it('should return error for invalid MIME type', () => {
+    const images = [createMockImage(1000, 'image/bmp')]; // BMP is not supported
+    const result = validateHintImages(images);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('非対応形式');
+    expect(result.error).toContain('image/bmp');
+  });
+
+  it('should accept normalized image/jpg as image/jpeg', () => {
+    const images = [createMockImage(1000, 'image/jpg')];
+    const result = validateHintImages(images);
+    expect(result.valid).toBe(true);
+  });
+
+  it('should return error for multiple invalid images', () => {
+    const base64For6MB = Math.ceil((6 * 1024 * 1024) / 0.75);
+    const images = [
+      createMockImage(base64For6MB, 'image/png'), // Too large
+      createMockImage(1000, 'image/svg+xml'), // Invalid MIME
+    ];
+    const result = validateHintImages(images);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('画像1');
+    expect(result.error).toContain('画像2');
+  });
 });
 
 describe('trimHintImagesToLimit', () => {
-  const createMockImage = (base64Length: number) => ({
+  const createMockImage = (base64Length: number, mimeType?: string) => ({
     image_data: 'x'.repeat(base64Length),
+    ...(mimeType && { mime_type: mimeType }),
   });
 
   it('should return empty array for empty input', () => {
@@ -138,5 +175,54 @@ describe('trimHintImagesToLimit', () => {
       0
     );
     expect(totalSize).toBeLessThanOrEqual(MAX_TOTAL_SIZE);
+  });
+
+  it('should filter out images exceeding MAX_FILE_SIZE', () => {
+    const base64For6MB = Math.ceil((6 * 1024 * 1024) / 0.75);
+    const images = [
+      createMockImage(1000, 'image/png'), // Valid
+      createMockImage(base64For6MB, 'image/png'), // Too large
+      createMockImage(1000, 'image/jpeg'), // Valid
+    ];
+    const { trimmed, removedCount } = trimHintImagesToLimit(images);
+    expect(trimmed).toHaveLength(2);
+    expect(removedCount).toBe(1);
+    // The oversized image should be filtered out
+    expect(trimmed.every((img) => img.image_data.length === 1000)).toBe(true);
+  });
+
+  it('should filter out images with invalid MIME type', () => {
+    const images = [
+      createMockImage(1000, 'image/png'), // Valid
+      createMockImage(1000, 'image/bmp'), // Invalid MIME
+      createMockImage(1000, 'image/svg+xml'), // Invalid MIME
+      createMockImage(1000, 'image/jpeg'), // Valid
+    ];
+    const { trimmed, removedCount } = trimHintImagesToLimit(images);
+    expect(trimmed).toHaveLength(2);
+    expect(removedCount).toBe(2);
+  });
+
+  it('should normalize image/jpg to image/jpeg and keep it', () => {
+    const images = [createMockImage(1000, 'image/jpg')];
+    const { trimmed, removedCount } = trimHintImagesToLimit(images);
+    expect(trimmed).toHaveLength(1);
+    expect(removedCount).toBe(0);
+  });
+
+  it('should filter invalid images first, then trim by count and size', () => {
+    const base64For6MB = Math.ceil((6 * 1024 * 1024) / 0.75);
+    // Create 22 images: 2 invalid (1 oversized, 1 bad MIME), 20 valid
+    const images = [
+      createMockImage(base64For6MB, 'image/png'), // Invalid: too large
+      createMockImage(1000, 'image/bmp'), // Invalid: bad MIME
+      ...Array(22)
+        .fill(null)
+        .map(() => createMockImage(1000, 'image/png')), // Valid
+    ];
+    const { trimmed, removedCount } = trimHintImagesToLimit(images);
+    // 2 invalid filtered + 2 over count limit = 4 removed
+    expect(trimmed).toHaveLength(20);
+    expect(removedCount).toBe(4);
   });
 });

@@ -316,6 +316,18 @@ export class ScenarioRunner {
         hintImages = await getStepImages(scenario.id);
         if (hintImages.length > 0) {
           this.log(`[Batch Runner] ${hintImages.length}枚のヒント画像を読み込みました`);
+
+          // Validate hint images against API constraints (same as executeScenario)
+          const validation = validateHintImages(hintImages);
+          if (!validation.valid && validation.error) {
+            // Images exceed API limits - trim to fit and warn
+            this.log(`[Batch Runner] 警告: ${validation.error}`);
+            const { trimmed, removedCount } = trimHintImagesToLimit(hintImages);
+            if (removedCount > 0) {
+              this.log(`[Batch Runner] API制限のため${removedCount}枚のヒント画像を除外しました（残り: ${trimmed.length}枚）`);
+              hintImages = trimmed as typeof hintImages;
+            }
+          }
         }
       } catch (imageError) {
         this.log(`[Batch Runner] ヒント画像の読み込みに失敗しました（実行は継続）: ${imageError instanceof Error ? imageError.message : String(imageError)}`);

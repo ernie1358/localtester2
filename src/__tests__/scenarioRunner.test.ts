@@ -627,6 +627,150 @@ describe('ScenarioRunner', () => {
     });
   });
 
+  describe('runSelected - Hint Image Validation and Trimming', () => {
+    it('should validate and trim hint images that exceed API limits', async () => {
+      const logs: string[] = [];
+
+      // Create 25 small images (exceeds MAX_IMAGE_COUNT of 20)
+      const mockHintImages = Array(25)
+        .fill(null)
+        .map((_, i) => ({
+          id: `img${i}`,
+          scenario_id: '1',
+          image_data: 'x'.repeat(1000), // Small base64
+          file_name: `hint${i}.png`,
+          mime_type: 'image/png',
+          order_index: i,
+          created_at: '',
+        }));
+
+      mockGetStepImages.mockResolvedValue(mockHintImages);
+
+      mockRunAgentLoop.mockResolvedValue({
+        success: true,
+        executedActions: [],
+        iterations: 1,
+        testResult: { status: 'success' },
+      });
+
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === 'is_stop_requested') return false;
+        return undefined;
+      });
+
+      const { ScenarioRunner } = await import('../services/scenarioRunner');
+      const runner = new ScenarioRunner();
+
+      const scenarios: StoredScenario[] = [
+        { id: '1', title: 'Test', description: 'D', order_index: 0, created_at: '', updated_at: '' },
+      ];
+
+      await runner.runSelected(['1'], scenarios, {
+        onLog: (msg) => logs.push(msg),
+      });
+
+      // Should have warning logs about exceeding limits
+      expect(logs.some((l) => l.includes('20枚を超えています'))).toBe(true);
+      expect(logs.some((l) => l.includes('除外しました'))).toBe(true);
+
+      // Verify runAgentLoop was called with trimmed images (20 or fewer)
+      const callArgs = mockRunAgentLoop.mock.calls[0][0];
+      expect(callArgs.hintImages.length).toBeLessThanOrEqual(20);
+
+      await runner.destroy();
+    });
+
+    it('should pass hint images unchanged when within limits', async () => {
+      const mockHintImages = Array(5)
+        .fill(null)
+        .map((_, i) => ({
+          id: `img${i}`,
+          scenario_id: '1',
+          image_data: 'x'.repeat(1000),
+          file_name: `hint${i}.png`,
+          mime_type: 'image/png',
+          order_index: i,
+          created_at: '',
+        }));
+
+      mockGetStepImages.mockResolvedValue(mockHintImages);
+
+      mockRunAgentLoop.mockResolvedValue({
+        success: true,
+        executedActions: [],
+        iterations: 1,
+        testResult: { status: 'success' },
+      });
+
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === 'is_stop_requested') return false;
+        return undefined;
+      });
+
+      const { ScenarioRunner } = await import('../services/scenarioRunner');
+      const runner = new ScenarioRunner();
+
+      const scenarios: StoredScenario[] = [
+        { id: '1', title: 'Test', description: 'D', order_index: 0, created_at: '', updated_at: '' },
+      ];
+
+      await runner.runSelected(['1'], scenarios);
+
+      // Verify runAgentLoop was called with all 5 images (no trimming)
+      const callArgs = mockRunAgentLoop.mock.calls[0][0];
+      expect(callArgs.hintImages.length).toBe(5);
+
+      await runner.destroy();
+    });
+
+    it('should filter out invalid images (oversized or bad MIME) in runSelected', async () => {
+      const logs: string[] = [];
+
+      const base64For6MB = Math.ceil((6 * 1024 * 1024) / 0.75);
+      const mockHintImages = [
+        { id: 'valid1', scenario_id: '1', image_data: 'x'.repeat(1000), file_name: 'valid1.png', mime_type: 'image/png', order_index: 0, created_at: '' },
+        { id: 'oversized', scenario_id: '1', image_data: 'x'.repeat(base64For6MB), file_name: 'oversized.png', mime_type: 'image/png', order_index: 1, created_at: '' },
+        { id: 'badmime', scenario_id: '1', image_data: 'x'.repeat(1000), file_name: 'bad.bmp', mime_type: 'image/bmp', order_index: 2, created_at: '' },
+        { id: 'valid2', scenario_id: '1', image_data: 'x'.repeat(1000), file_name: 'valid2.jpeg', mime_type: 'image/jpeg', order_index: 3, created_at: '' },
+      ];
+
+      mockGetStepImages.mockResolvedValue(mockHintImages);
+
+      mockRunAgentLoop.mockResolvedValue({
+        success: true,
+        executedActions: [],
+        iterations: 1,
+        testResult: { status: 'success' },
+      });
+
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === 'is_stop_requested') return false;
+        return undefined;
+      });
+
+      const { ScenarioRunner } = await import('../services/scenarioRunner');
+      const runner = new ScenarioRunner();
+
+      const scenarios: StoredScenario[] = [
+        { id: '1', title: 'Test', description: 'D', order_index: 0, created_at: '', updated_at: '' },
+      ];
+
+      await runner.runSelected(['1'], scenarios, {
+        onLog: (msg) => logs.push(msg),
+      });
+
+      // Should have warning about invalid images
+      expect(logs.some((l) => l.includes('警告'))).toBe(true);
+      expect(logs.some((l) => l.includes('除外しました'))).toBe(true);
+
+      // Verify runAgentLoop was called with only valid images (2 out of 4)
+      const callArgs = mockRunAgentLoop.mock.calls[0][0];
+      expect(callArgs.hintImages.length).toBe(2);
+
+      await runner.destroy();
+    });
+  });
+
   describe('run - Hint Images for executeScenario path', () => {
     it('should load and pass hint images when using run() method', async () => {
       const mockHintImages = [
