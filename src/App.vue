@@ -28,6 +28,7 @@ const logs = ref<string[]>([]);
 const showScenarioForm = ref(false);
 const editingScenario = ref<StoredScenario | null>(null);
 const editingScenarioImages = ref<StepImage[]>([]);
+const scenarioFormSaveError = ref('');
 const showDeleteConfirm = ref(false);
 const deletingScenario = ref<StoredScenario | null>(null);
 
@@ -93,11 +94,13 @@ async function requestPermissions() {
 function openNewScenarioForm() {
   editingScenario.value = null;
   editingScenarioImages.value = [];
+  scenarioFormSaveError.value = '';
   showScenarioForm.value = true;
 }
 
 async function openEditForm(scenario: StoredScenario) {
   editingScenario.value = scenario;
+  scenarioFormSaveError.value = '';
   // Load existing images for this scenario with error handling
   try {
     editingScenarioImages.value = await getStepImages(scenario.id);
@@ -153,10 +156,10 @@ async function handleSaveScenario(
       }
     }
 
-    // If image errors occurred, show error and don't close the modal
+    // If image errors occurred, show error in modal and don't close
     if (imageErrors.length > 0) {
       const errorMsg = `画像の保存に失敗しました:\n${imageErrors.join('\n')}\n\nテストステップ自体は保存されています。再度保存を試すか、画像を削除してください。`;
-      errorMessage.value = errorMsg;
+      scenarioFormSaveError.value = errorMsg;
       addLog(`エラー: 一部の画像保存に失敗しました: ${imageErrors.join(', ')}`);
       // Reload images to reflect current state (partially saved images)
       editingScenarioImages.value = await getStepImages(scenarioId);
@@ -168,6 +171,7 @@ async function handleSaveScenario(
     showScenarioForm.value = false;
     editingScenario.value = null;
     editingScenarioImages.value = [];
+    scenarioFormSaveError.value = '';
   } catch (error) {
     errorMessage.value =
       error instanceof Error ? error.message : String(error);
@@ -178,6 +182,7 @@ function handleCancelForm() {
   showScenarioForm.value = false;
   editingScenario.value = null;
   editingScenarioImages.value = [];
+  scenarioFormSaveError.value = '';
 }
 
 function openDeleteConfirm(scenario: StoredScenario) {
@@ -367,6 +372,7 @@ function addLog(message: string) {
       :visible="showScenarioForm"
       :scenario="editingScenario"
       :existing-images="editingScenarioImages"
+      :save-error="scenarioFormSaveError"
       @save="handleSaveScenario"
       @cancel="handleCancelForm"
     />

@@ -6,6 +6,7 @@ const props = defineProps<{
   scenario?: StoredScenario | null;
   visible: boolean;
   existingImages?: StepImage[];
+  saveError?: string;
 }>();
 
 const emit = defineEmits<{
@@ -319,6 +320,12 @@ function handleCancel() {
   <div v-if="visible" class="modal-overlay" @click.self="handleCancel">
     <div class="modal scenario-form-modal">
       <h2>{{ modalTitle }}</h2>
+
+      <!-- Save error message (displayed in modal) -->
+      <div v-if="saveError" class="save-error-box">
+        {{ saveError }}
+      </div>
+
       <div class="form-group">
         <label for="title-input"
           >タイトル <span class="optional-label">（省略可）</span></label
@@ -458,6 +465,23 @@ function handleCancel() {
 .scenario-form-modal h2 {
   margin-top: 0;
   margin-bottom: 20px;
+}
+.save-error-box {
+  padding: 12px 16px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  background-color: #f8d7da;
+  border: 1px solid #f5c6cb;
+  color: #721c24;
+  font-size: 13px;
+  white-space: pre-line;
+}
+@media (prefers-color-scheme: dark) {
+  .save-error-box {
+    background-color: #2c0b0e;
+    border-color: #491217;
+    color: #f5c6cb;
+  }
 }
 .form-group {
   margin-bottom: 16px;

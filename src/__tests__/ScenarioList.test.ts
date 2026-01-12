@@ -14,14 +14,12 @@ vi.mock('vue-draggable-plus', () => ({
   VueDraggable: defineComponent({
     name: 'VueDraggable',
     props: ['modelValue', 'handle', 'disabled', 'itemKey'],
-    emits: ['update:modelValue'],
-    setup(props, { slots }) {
+    emits: ['update:modelValue', 'end'],
+    setup(_props, { slots }) {
       return () => {
-        const items = props.modelValue || [];
-        return h('div', { class: 'mock-draggable' },
-          items.map((item: StoredScenario, index: number) =>
-            slots.item?.({ element: item, index })
-          )
+        // VueDraggable uses default slot, not item slot
+        return h('div', { class: 'mock-draggable scenario-rows' },
+          slots.default?.()
         );
       };
     },
@@ -50,7 +48,7 @@ describe('ScenarioList Component', () => {
       });
 
       expect(wrapper.find('.empty-message').exists()).toBe(true);
-      expect(wrapper.text()).toContain('シナリオがありません');
+      expect(wrapper.text()).toContain('テストステップがありません');
     });
   });
 
