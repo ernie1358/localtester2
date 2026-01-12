@@ -18,6 +18,7 @@ const description = ref('');
 const images = ref<FormImageData[]>([]);
 const isDragging = ref(false);
 const imageError = ref('');
+const isProcessingImages = ref(false);
 
 // File input ref for fallback
 const fileInputRef = ref<HTMLInputElement | null>(null);
@@ -28,7 +29,10 @@ const modalTitle = computed(() =>
 );
 
 // Title is optional, only description is required
-const canSave = computed(() => description.value.trim().length > 0);
+// Also disabled while processing images to prevent saving incomplete data
+const canSave = computed(
+  () => description.value.trim().length > 0 && !isProcessingImages.value
+);
 
 // Title placeholder: shows auto-generated preview
 const titlePlaceholder = computed(() => {
@@ -60,6 +64,7 @@ function initializeImages() {
     images.value = [];
   }
   imageError.value = '';
+  imageLimitWarning.value = '';
 }
 
 // Initialize on mount
@@ -120,7 +125,20 @@ const ALLOWED_MIME_TYPES = [
   'image/gif',
   'image/webp',
 ];
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB per file
+const MAX_IMAGE_COUNT = 10; // Maximum number of hint images
+const MAX_TOTAL_SIZE = 20 * 1024 * 1024; // 20MB total for all images
+
+// Warning state
+const imageLimitWarning = ref('');
+
+// Calculate total size of visible images (base64 to approximate bytes)
+function calculateTotalImageSize(): number {
+  return visibleImages.value.reduce((total, img) => {
+    // base64 string length * 0.75 ≈ original bytes
+    return total + Math.ceil(img.base64.length * 0.75);
+  }, 0);
+}
 
 // Normalize MIME type (image/jpg -> image/jpeg for Claude API compatibility)
 function normalizeMimeType(mimeType: string): string {
@@ -159,30 +177,62 @@ async function fileToBase64(
 // Process files (from drop or file input)
 async function processFiles(files: FileList | File[]) {
   imageError.value = '';
+  imageLimitWarning.value = '';
   const errors: string[] = [];
+  isProcessingImages.value = true;
 
-  for (const file of Array.from(files)) {
-    const validationError = validateImageFile(file);
-    if (validationError) {
-      errors.push(validationError);
-      continue;
+  try {
+    const fileArray = Array.from(files);
+
+    // Check if adding these files would exceed the count limit
+    const currentCount = visibleImages.value.length;
+    if (currentCount >= MAX_IMAGE_COUNT) {
+      imageError.value = `画像は最大${MAX_IMAGE_COUNT}枚までです`;
+      return;
     }
 
-    try {
-      const { base64, mimeType } = await fileToBase64(file);
-      images.value.push({
-        base64,
-        fileName: file.name,
-        mimeType: normalizeMimeType(mimeType),
-        markedForDeletion: false,
-      });
-    } catch (error) {
-      errors.push(`${file.name}: 読み込みに失敗しました`);
+    const availableSlots = MAX_IMAGE_COUNT - currentCount;
+    if (fileArray.length > availableSlots) {
+      imageLimitWarning.value = `${fileArray.length}枚中${availableSlots}枚のみ追加可能です（上限: ${MAX_IMAGE_COUNT}枚）`;
     }
-  }
 
-  if (errors.length > 0) {
-    imageError.value = errors.join('\n');
+    // Process only up to the available slots
+    const filesToProcess = fileArray.slice(0, availableSlots);
+
+    for (const file of filesToProcess) {
+      const validationError = validateImageFile(file);
+      if (validationError) {
+        errors.push(validationError);
+        continue;
+      }
+
+      // Check total size before adding
+      const currentTotalSize = calculateTotalImageSize();
+      if (currentTotalSize + file.size > MAX_TOTAL_SIZE) {
+        errors.push(
+          `${file.name}: 追加すると総容量が${Math.round(MAX_TOTAL_SIZE / 1024 / 1024)}MBを超えます`
+        );
+        continue;
+      }
+
+      try {
+        const { base64, mimeType } = await fileToBase64(file);
+        images.value.push({
+          base64,
+          fileName: file.name,
+          mimeType: normalizeMimeType(mimeType),
+          markedForDeletion: false,
+        });
+      } catch (error) {
+        errors.push(`${file.name}: 読み込みに失敗しました`);
+      }
+    }
+
+    if (errors.length > 0) {
+      imageError.value = errors.join('\n');
+    }
+  } finally {
+    isProcessingImages.value = false;
   }
 }
 
@@ -329,6 +379,16 @@ function handleCancel() {
             </span>
           </div>
         </div>
+
+        <!-- Processing indicator -->
+        <p v-if="isProcessingImages" class="processing-text">
+          画像を読み込み中...
+        </p>
+
+        <!-- Warning message (for partial adds) -->
+        <p v-if="imageLimitWarning" class="warning-text">
+          {{ imageLimitWarning }}
+        </p>
 
         <!-- Error message -->
         <p v-if="imageError" class="error-text">{{ imageError }}</p>
@@ -568,6 +628,22 @@ function handleCancel() {
 }
 .remove-image-btn:hover {
   background: #dc3545;
+}
+
+/* Processing text */
+.processing-text {
+  font-size: 12px;
+  color: #24c8db;
+  margin-top: 8px;
+  margin-bottom: 0;
+}
+
+/* Warning text */
+.warning-text {
+  font-size: 12px;
+  color: #f0ad4e;
+  margin-top: 8px;
+  margin-bottom: 0;
 }
 
 /* Error text */
