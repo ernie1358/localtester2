@@ -152,7 +152,10 @@ export class ScenarioRunner {
         if (imageError instanceof Error && imageError.message.includes('API制限を超えています')) {
           throw imageError;
         }
-        this.log(`[Scenario Runner] ヒント画像の読み込みに失敗しました（実行は継続）: ${imageError instanceof Error ? imageError.message : String(imageError)}`);
+        // DB read failure is also a critical error - stop execution to prevent running without expected hints
+        const errorMsg = `ヒント画像の読み込みに失敗しました: ${imageError instanceof Error ? imageError.message : String(imageError)}`;
+        this.log(`[Scenario Runner] エラー: ${errorMsg}`);
+        throw new Error(errorMsg);
       }
 
       const result: AgentLoopResult = await runAgentLoop({
@@ -342,7 +345,23 @@ export class ScenarioRunner {
           }
         }
       } catch (imageError) {
-        this.log(`[Batch Runner] ヒント画像の読み込みに失敗しました（実行は継続）: ${imageError instanceof Error ? imageError.message : String(imageError)}`);
+        // DB read failure is a critical error - stop this scenario to prevent running without expected hints
+        const errorMsg = `ヒント画像の読み込みに失敗しました: ${imageError instanceof Error ? imageError.message : String(imageError)}`;
+        this.log(`[Batch Runner] エラー: ${errorMsg}`);
+        results.push({
+          scenarioId: scenario.id,
+          title: scenario.title,
+          success: false,
+          error: errorMsg,
+          completedActions: 0,
+          actionHistory: [],
+        });
+        failureCount++;
+        if (this.state.stopOnFailure) {
+          this.log('[Batch Runner] stopOnFailure enabled - stopping');
+          break;
+        }
+        continue;
       }
 
       // Execute scenario

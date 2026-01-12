@@ -523,7 +523,7 @@ describe('ScenarioRunner', () => {
   });
 
   describe('runSelected - Hint Image Loading Failure Handling', () => {
-    it('should continue execution with empty hintImages when getStepImages fails', async () => {
+    it('should fail scenario and continue to next when getStepImages fails', async () => {
       const logs: string[] = [];
 
       // First call throws error, second call succeeds
@@ -560,21 +560,16 @@ describe('ScenarioRunner', () => {
         onLog: (msg) => logs.push(msg),
       });
 
-      // Both scenarios should execute successfully
-      expect(result.successCount).toBe(2);
-      expect(result.failureCount).toBe(0);
+      // First scenario fails due to image load error, second succeeds
+      expect(result.successCount).toBe(1);
+      expect(result.failureCount).toBe(1);
 
-      // First call should have empty hintImages due to error
-      expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          hintImages: [],
-        })
-      );
+      // First scenario should fail without calling runAgentLoop
+      // Only one call to runAgentLoop (for scenario 2)
+      expect(mockRunAgentLoop).toHaveBeenCalledTimes(1);
 
       // Second call should have the hint images
-      expect(mockRunAgentLoop).toHaveBeenNthCalledWith(
-        2,
+      expect(mockRunAgentLoop).toHaveBeenCalledWith(
         expect.objectContaining({
           hintImages: expect.arrayContaining([
             expect.objectContaining({ id: 'img1' }),
@@ -582,13 +577,18 @@ describe('ScenarioRunner', () => {
         })
       );
 
-      // Warning log should be present
+      // Error log should be present
       expect(logs.some((l) => l.includes('ヒント画像の読み込みに失敗しました'))).toBe(true);
+
+      // First result should have failure error
+      expect(result.results[0].success).toBe(false);
+      expect(result.results[0].error).toContain('ヒント画像の読み込みに失敗しました');
 
       await runner.destroy();
     });
 
-    it('should not fail scenario execution when all hint image loads fail', async () => {
+    it('should fail scenario execution when hint image load fails', async () => {
+      const logs: string[] = [];
       mockGetStepImages.mockRejectedValue(new Error('Storage unavailable'));
 
       mockRunAgentLoop.mockResolvedValue({
@@ -610,18 +610,20 @@ describe('ScenarioRunner', () => {
         { id: '1', title: 'Test', description: 'D', order_index: 0, created_at: '', updated_at: '' },
       ];
 
-      const result = await runner.runSelected(['1'], scenarios);
+      const result = await runner.runSelected(['1'], scenarios, {
+        onLog: (msg) => logs.push(msg),
+      });
 
-      // Scenario should still succeed (hint images are optional)
-      expect(result.successCount).toBe(1);
-      expect(result.failureCount).toBe(0);
+      // Scenario should fail due to image load error
+      expect(result.successCount).toBe(0);
+      expect(result.failureCount).toBe(1);
 
-      // runAgentLoop should be called with empty hintImages
-      expect(mockRunAgentLoop).toHaveBeenCalledWith(
-        expect.objectContaining({
-          hintImages: [],
-        })
-      );
+      // runAgentLoop should NOT be called (failed before execution)
+      expect(mockRunAgentLoop).not.toHaveBeenCalled();
+
+      // Result should contain the error
+      expect(result.results[0].success).toBe(false);
+      expect(result.results[0].error).toContain('ヒント画像の読み込みに失敗しました');
 
       await runner.destroy();
     });

@@ -236,7 +236,7 @@ describe('ScenarioForm Component', () => {
         // Should show warning (not error) - file is still added
         const warningText = wrapper.find('.warning-text');
         expect(warningText.exists()).toBe(true);
-        expect(warningText.text()).toContain('送信時に除外される可能性');
+        expect(warningText.text()).toContain('実行がブロックされます');
 
         // Image should still be added (save is unlimited)
         const previews = wrapper.findAll('.image-preview');

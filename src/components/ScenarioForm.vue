@@ -94,14 +94,14 @@ function validateExistingImages() {
     const imageSize = Math.ceil(img.base64.length * 0.75);
     if (imageSize > MAX_FILE_SIZE) {
       const sizeMB = (imageSize / (1024 * 1024)).toFixed(1);
-      warnings.push(`${img.fileName}: ${sizeMB}MBは送信時に除外されます（1枚${UI_MAX_FILE_SIZE_MB}MB以下推奨）`);
+      warnings.push(`${img.fileName}: ${sizeMB}MBのため実行がブロックされます（1枚${UI_MAX_FILE_SIZE_MB}MB以下にしてください）`);
     }
 
     // Check MIME type
     if (img.mimeType) {
       const normalizedMime = img.mimeType === 'image/jpg' ? 'image/jpeg' : img.mimeType;
       if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(normalizedMime)) {
-        warnings.push(`${img.fileName}: 非対応形式(${img.mimeType})のため送信時に除外されます`);
+        warnings.push(`${img.fileName}: 非対応形式(${img.mimeType})のため実行がブロックされます`);
       }
     }
   }
@@ -260,10 +260,10 @@ async function processFiles(files: FileList | File[]) {
         continue;
       }
 
-      // Warn about large files but still allow them (they will be excluded at send time)
+      // Warn about large files - they will cause execution to be blocked
       if (file.size > MAX_FILE_SIZE) {
         const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
-        fileWarnings.push(`${file.name}: ${sizeMB}MBは送信時に除外される可能性があります（1枚${UI_MAX_FILE_SIZE_MB}MB以下推奨）`);
+        fileWarnings.push(`${file.name}: ${sizeMB}MBのため実行がブロックされます（1枚${UI_MAX_FILE_SIZE_MB}MB以下にしてください）`);
       }
 
       try {
@@ -345,6 +345,9 @@ function removeImage(index: number) {
     // Remove new image from array
     images.value.splice(actualIndex, 1);
   }
+
+  // Recalculate warnings after image removal
+  validateExistingImages();
 }
 
 // Find actual index in images array from visible index
@@ -740,6 +743,7 @@ function handleCancel() {
   color: #f0ad4e;
   margin-top: 8px;
   margin-bottom: 0;
+  white-space: pre-line;
 }
 
 /* Error text */
