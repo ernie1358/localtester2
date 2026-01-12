@@ -308,6 +308,15 @@ function mapClaudeFailureReason(claudeReason?: string): FailureReason {
   if (reasonLower.includes('予期しない') || reasonLower.includes('unexpected')) {
     return 'unexpected_state';
   }
+  // クリック位置が違う / wrong click position -> action_mismatch
+  if (
+    reasonLower.includes('位置が違う') ||
+    reasonLower.includes('クリック位置') ||
+    reasonLower.includes('wrong position') ||
+    reasonLower.includes('wrong click')
+  ) {
+    return 'action_mismatch';
+  }
 
   return 'unknown';
 }

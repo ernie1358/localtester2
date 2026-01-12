@@ -527,6 +527,99 @@ describe('ScenarioForm Component', () => {
     });
   });
 
+  describe('Warning Recalculation on Image Removal', () => {
+    it('should clear warning when images are deleted to below limit', async () => {
+      // Mock FileReader to be synchronous for testing
+      const originalFileReader = globalThis.FileReader;
+      class MockFileReader {
+        onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+        onerror: (() => void) | null = null;
+        result: string | null = null;
+
+        readAsDataURL(_file: File) {
+          this.result = 'data:image/png;base64,testdata';
+          Promise.resolve().then(() => {
+            if (this.onload) {
+              this.onload({ target: this } as unknown as ProgressEvent<FileReader>);
+            }
+          });
+        }
+      }
+      globalThis.FileReader = MockFileReader as unknown as typeof FileReader;
+
+      try {
+        // Start with 21 existing images (over the 20 limit)
+        const existingImages: StepImage[] = Array(21)
+          .fill(null)
+          .map((_, i) =>
+            createMockStepImage({
+              id: `img-${i}`,
+              file_name: `image${i}.png`,
+            })
+          );
+
+        const wrapper = mount(ScenarioForm, {
+          props: {
+            visible: true,
+            scenario: null,
+            existingImages,
+          },
+        });
+
+        await flushPromises();
+
+        // Initially should show warning (21 > 20)
+        let warningText = wrapper.find('.warning-text');
+        expect(warningText.exists()).toBe(true);
+        expect(warningText.text()).toContain('API制限');
+
+        // Delete 2 images to get below limit (19)
+        await wrapper.findAll('.remove-image-btn')[0].trigger('click');
+        await flushPromises();
+        await wrapper.findAll('.remove-image-btn')[0].trigger('click');
+        await flushPromises();
+
+        // Warning should be cleared (19 <= 20)
+        warningText = wrapper.find('.warning-text');
+        expect(warningText.exists()).toBe(false);
+
+        // Should have 19 images now
+        const previews = wrapper.findAll('.image-preview');
+        expect(previews.length).toBe(19);
+      } finally {
+        globalThis.FileReader = originalFileReader;
+      }
+    });
+
+    it('should show warning when existing images exceed limit on load', async () => {
+      // Start with 25 existing images (over the 20 limit)
+      const existingImages: StepImage[] = Array(25)
+        .fill(null)
+        .map((_, i) =>
+          createMockStepImage({
+            id: `img-${i}`,
+            file_name: `image${i}.png`,
+          })
+        );
+
+      const wrapper = mount(ScenarioForm, {
+        props: {
+          visible: true,
+          scenario: null,
+          existingImages,
+        },
+      });
+
+      await flushPromises();
+
+      // Should show warning immediately on load (25 > 20)
+      const warningText = wrapper.find('.warning-text');
+      expect(warningText.exists()).toBe(true);
+      expect(warningText.text()).toContain('API制限');
+      expect(warningText.text()).toContain('20枚');
+    });
+  });
+
   describe('Processing State', () => {
     it('should have isProcessingImages ref', () => {
       const wrapper = mount(ScenarioForm, {

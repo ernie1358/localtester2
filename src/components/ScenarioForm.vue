@@ -75,6 +75,7 @@ function initializeImages() {
     images.value = [];
   }
   imageError.value = '';
+  fileWarning.value = '';
   imageLimitWarning.value = '';
 }
 
@@ -134,8 +135,11 @@ watch(
 // - MAX_FILE_SIZE: 5MB per file
 // - MAX_TOTAL_SIZE: 15MB total (32MB API limit minus screenshot buffer)
 
-// Warning state
+// Warning states
+// API limit warning (recalculated on visibleImages change)
 const imageLimitWarning = ref('');
+// Individual file warnings (set during processFiles, persists until next upload)
+const fileWarning = ref('');
 
 // Calculate total size of visible images (base64 to approximate bytes)
 function calculateTotalImageSize(): number {
@@ -144,6 +148,37 @@ function calculateTotalImageSize(): number {
     return total + Math.ceil(img.base64.length * 0.75);
   }, 0);
 }
+
+// Recalculate warning based on current visible images
+function recalculateWarning(): void {
+  const totalCount = visibleImages.value.length;
+  const totalSize = calculateTotalImageSize();
+
+  if (totalCount > MAX_IMAGE_COUNT || totalSize > MAX_TOTAL_SIZE) {
+    const limitWarnings: string[] = [];
+    if (totalCount > MAX_IMAGE_COUNT) {
+      limitWarnings.push(`${MAX_IMAGE_COUNT}枚`);
+    }
+    if (totalSize > MAX_TOTAL_SIZE) {
+      limitWarnings.push(`${UI_MAX_TOTAL_SIZE_MB}MB`);
+    }
+    imageLimitWarning.value = `※ API制限（${limitWarnings.join('・')}まで）を超えています。送信時に一部の画像が除外されます。`;
+  } else {
+    imageLimitWarning.value = '';
+  }
+}
+
+// Watch visibleImages changes to recalculate warning
+// Skip during processFiles to avoid overwriting individual file warnings
+watch(
+  visibleImages,
+  () => {
+    if (!isProcessingImages.value) {
+      recalculateWarning();
+    }
+  },
+  { deep: true }
+);
 
 // Normalize MIME type (image/jpg -> image/jpeg for Claude API compatibility)
 function normalizeMimeType(mimeType: string): string {
@@ -173,14 +208,13 @@ async function fileToBase64(
 // API constraints are applied at send time (trimHintImagesToLimit in scenarioRunner.ts)
 async function processFiles(files: FileList | File[]) {
   imageError.value = '';
-  imageLimitWarning.value = '';
-  const warnings: string[] = [];
+  fileWarning.value = '';
+  const fileWarnings: string[] = [];
   const errors: string[] = [];
   isProcessingImages.value = true;
 
   try {
     const fileArray = Array.from(files);
-    let addedCount = 0;
 
     // Process all files - save is unlimited, API limits apply at send time
     for (const file of fileArray) {
@@ -193,7 +227,7 @@ async function processFiles(files: FileList | File[]) {
       // Warn about large files but still allow them (they will be excluded at send time)
       if (file.size > MAX_FILE_SIZE) {
         const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
-        warnings.push(`${file.name}: ${sizeMB}MBは送信時に除外される可能性があります（1枚${UI_MAX_FILE_SIZE_MB}MB以下推奨）`);
+        fileWarnings.push(`${file.name}: ${sizeMB}MBは送信時に除外される可能性があります（1枚${UI_MAX_FILE_SIZE_MB}MB以下推奨）`);
       }
 
       try {
@@ -204,36 +238,23 @@ async function processFiles(files: FileList | File[]) {
           mimeType: normalizeMimeType(mimeType),
           markedForDeletion: false,
         });
-        addedCount++;
       } catch (error) {
         errors.push(`${file.name}: 読み込みに失敗しました`);
       }
     }
 
-    // Show warning if limits will be exceeded at send time
-    const totalCount = visibleImages.value.length;
-    const totalSize = calculateTotalImageSize();
-
-    if (totalCount > MAX_IMAGE_COUNT || totalSize > MAX_TOTAL_SIZE) {
-      const limitWarnings: string[] = [];
-      if (totalCount > MAX_IMAGE_COUNT) {
-        limitWarnings.push(`${MAX_IMAGE_COUNT}枚`);
-      }
-      if (totalSize > MAX_TOTAL_SIZE) {
-        limitWarnings.push(`${UI_MAX_TOTAL_SIZE_MB}MB`);
-      }
-      warnings.push(`※ API制限（${limitWarnings.join('・')}まで）を超えています。送信時に一部の画像が除外されます。`);
-    }
-
-    // Show warnings (non-blocking)
-    if (warnings.length > 0) {
-      imageLimitWarning.value = warnings.join('\n');
+    // Show individual file warnings (non-blocking)
+    if (fileWarnings.length > 0) {
+      fileWarning.value = fileWarnings.join('\n');
     }
 
     // Show errors (blocking for those files only)
     if (errors.length > 0) {
       imageError.value = errors.join('\n');
     }
+
+    // Recalculate API limit warning
+    recalculateWarning();
   } finally {
     isProcessingImages.value = false;
   }
@@ -395,7 +416,10 @@ function handleCancel() {
           画像を読み込み中...
         </p>
 
-        <!-- Warning message (for partial adds) -->
+        <!-- Warning messages -->
+        <p v-if="fileWarning" class="warning-text">
+          {{ fileWarning }}
+        </p>
         <p v-if="imageLimitWarning" class="warning-text">
           {{ imageLimitWarning }}
         </p>
