@@ -83,19 +83,14 @@ defineExpose({ getSelectedIdsInOrder });
           class="scenario-row"
           :class="{ selected: selectedIds.has(element.id) }"
         >
-          <span
-            class="drag-handle"
-            :class="{ disabled: isRunning }"
-            title="ドラッグして並び替え"
-            >&#9776;</span
-          >
-          <span class="order-number">{{ index + 1 }}</span>
           <input
             type="checkbox"
             :checked="selectedIds.has(element.id)"
             @change="toggleSelection(element.id)"
             :disabled="isRunning"
+            class="scenario-checkbox"
           />
+          <span class="order-number">{{ index + 1 }}</span>
           <div class="scenario-info">
             <span class="scenario-title">{{ element.title }}</span>
             <span class="scenario-description">{{
@@ -118,6 +113,12 @@ defineExpose({ getSelectedIdsInOrder });
               削除
             </button>
           </div>
+          <span
+            class="drag-handle"
+            :class="{ disabled: isRunning }"
+            title="ドラッグして並び替え"
+            >&#9776;</span
+          >
         </div>
       </template>
     </VueDraggable>
@@ -182,11 +183,22 @@ defineExpose({ getSelectedIdsInOrder });
   border-color: #24c8db;
   background: rgba(36, 200, 219, 0.05);
 }
+.scenario-checkbox {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.scenario-checkbox:disabled {
+  cursor: not-allowed;
+}
 .drag-handle {
   cursor: grab;
   font-size: 18px;
   color: #888;
   user-select: none;
+  flex-shrink: 0;
+  padding: 4px;
 }
 .drag-handle.disabled {
   cursor: not-allowed;

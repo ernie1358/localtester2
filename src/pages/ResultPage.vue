@@ -36,8 +36,8 @@ function formatActionHistory(actions: ExecutedAction[]): string {
         <h2>サマリー</h2>
         <div class="summary-grid">
           <div class="summary-item">
-            <span class="label">実行シナリオ数</span>
-            <span class="value">{{ result.totalScenarios }}</span>
+            <span class="label">実行済み / 選択数</span>
+            <span class="value">{{ result.results.length }} / {{ result.totalScenarios }}</span>
           </div>
           <div class="summary-item success">
             <span class="label">成功</span>

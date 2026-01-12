@@ -107,10 +107,16 @@ async function handleSaveScenario(title: string, description: string) {
     }
     await loadScenarios();
     showScenarioForm.value = false;
+    editingScenario.value = null;
   } catch (error) {
     errorMessage.value =
       error instanceof Error ? error.message : String(error);
   }
+}
+
+function handleCancelForm() {
+  showScenarioForm.value = false;
+  editingScenario.value = null;
 }
 
 function openDeleteConfirm(scenario: StoredScenario) {
@@ -290,7 +296,7 @@ function addLog(message: string) {
       :visible="showScenarioForm"
       :scenario="editingScenario"
       @save="handleSaveScenario"
-      @cancel="showScenarioForm = false"
+      @cancel="handleCancelForm"
     />
 
     <DeleteConfirmDialog
