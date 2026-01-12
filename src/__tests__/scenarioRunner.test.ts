@@ -521,4 +521,81 @@ describe('ScenarioRunner', () => {
       await runner.destroy();
     });
   });
+
+  describe('run - Hint Images for executeScenario path', () => {
+    it('should load and pass hint images when using run() method', async () => {
+      const mockHintImages = [
+        { id: 'img1', scenario_id: 'test-id', image_data: 'base64data1', file_name: 'hint1.png', mime_type: 'image/png', order_index: 0, created_at: '' },
+      ];
+
+      mockGetStepImages.mockResolvedValue(mockHintImages);
+
+      mockRunAgentLoop.mockResolvedValue({
+        success: true,
+        executedActions: [],
+        iterations: 1,
+        testResult: { status: 'success' },
+      });
+
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === 'is_stop_requested') return false;
+        return undefined;
+      });
+
+      const { ScenarioRunner } = await import('../services/scenarioRunner');
+      const runner = new ScenarioRunner();
+
+      const scenarios = [
+        { id: 'test-id', title: 'Test Scenario', description: 'Test description', status: 'pending' as const },
+      ];
+
+      await runner.run(scenarios);
+
+      // Verify getStepImages was called
+      expect(mockGetStepImages).toHaveBeenCalledWith('test-id');
+
+      // Verify runAgentLoop was called with hintImages
+      expect(mockRunAgentLoop).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hintImages: mockHintImages,
+        })
+      );
+
+      await runner.destroy();
+    });
+
+    it('should pass empty array when no hint images exist via run() method', async () => {
+      mockGetStepImages.mockResolvedValue([]);
+
+      mockRunAgentLoop.mockResolvedValue({
+        success: true,
+        executedActions: [],
+        iterations: 1,
+        testResult: { status: 'success' },
+      });
+
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === 'is_stop_requested') return false;
+        return undefined;
+      });
+
+      const { ScenarioRunner } = await import('../services/scenarioRunner');
+      const runner = new ScenarioRunner();
+
+      const scenarios = [
+        { id: 'test-id', title: 'Test Scenario', description: 'Test description', status: 'pending' as const },
+      ];
+
+      await runner.run(scenarios);
+
+      // Verify runAgentLoop was called with empty hintImages
+      expect(mockRunAgentLoop).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hintImages: [],
+        })
+      );
+
+      await runner.destroy();
+    });
+  });
 });

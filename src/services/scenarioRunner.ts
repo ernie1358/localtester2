@@ -130,8 +130,15 @@ export class ScenarioRunner {
     this.log(`[Scenario Runner] Starting scenario: ${scenario.title}`);
 
     try {
+      // Load hint images for this scenario
+      const hintImages = await getStepImages(scenario.id);
+      if (hintImages.length > 0) {
+        this.log(`[Scenario Runner] ${hintImages.length}枚のヒント画像を読み込みました`);
+      }
+
       const result: AgentLoopResult = await runAgentLoop({
         scenario,
+        hintImages,
         abortSignal: this.abortController!.signal,
         onIteration: (iteration) => {
           scenario.iterations = iteration;

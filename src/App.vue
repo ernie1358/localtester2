@@ -98,8 +98,17 @@ function openNewScenarioForm() {
 
 async function openEditForm(scenario: StoredScenario) {
   editingScenario.value = scenario;
-  // Load existing images for this scenario
-  editingScenarioImages.value = await getStepImages(scenario.id);
+  // Load existing images for this scenario with error handling
+  try {
+    editingScenarioImages.value = await getStepImages(scenario.id);
+  } catch (error) {
+    console.error('Failed to load step images:', error);
+    // Fallback: open form without images
+    editingScenarioImages.value = [];
+    addLog(
+      `ヒント画像の読み込みに失敗しました: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
   showScenarioForm.value = true;
 }
 
