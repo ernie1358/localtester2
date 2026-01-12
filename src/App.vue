@@ -178,7 +178,12 @@ async function handleSaveScenario(
   }
 }
 
-function handleCancelForm() {
+async function handleCancelForm() {
+  // If there was a save error, the scenario might have been saved but images failed.
+  // Reload the list to ensure the saved scenario is visible.
+  if (scenarioFormSaveError.value) {
+    await loadScenarios();
+  }
   showScenarioForm.value = false;
   editingScenario.value = null;
   editingScenarioImages.value = [];
