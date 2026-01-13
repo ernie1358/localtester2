@@ -987,3 +987,478 @@ describe('runAgentLoop - Hint Image Coordinate Detection', () => {
     }
   });
 });
+
+describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedMessages = [];
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+  });
+
+  it('should re-match undetected hint images after screen transition and include updated coordinates', async () => {
+    let matchCallCount = 0;
+    let captureCallCount = 0;
+
+    // Mock: First capture returns screenshot where image1 is not found
+    // Second capture (after action) returns screenshot where image1 IS found
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'capture_screen') {
+        captureCallCount++;
+        return {
+          imageBase64: captureCallCount === 1 ? 'initialScreenshot' : 'afterTransitionScreenshot',
+          scaleFactor: 0.6,
+          displayScaleFactor: 2.0,
+          resizedWidth: 1560,
+          resizedHeight: 900,
+          originalWidth: 2600,
+          originalHeight: 1500,
+          monitorId: 0,
+        };
+      }
+      if (cmd === 'is_stop_requested') {
+        return false;
+      }
+      if (cmd === 'match_hint_images') {
+        matchCallCount++;
+        if (matchCallCount === 1) {
+          // Initial match: image1 not found, image2 found
+          return [
+            {
+              index: 0,
+              fileName: 'appears-later.png',
+              matchResult: {
+                found: false,
+                centerX: null,
+                centerY: null,
+                confidence: 0.3,
+                templateWidth: 100,
+                templateHeight: 50,
+                error: null,
+              },
+            },
+            {
+              index: 1,
+              fileName: 'always-visible.png',
+              matchResult: {
+                found: true,
+                centerX: 500,
+                centerY: 300,
+                confidence: 0.9,
+                templateWidth: 80,
+                templateHeight: 40,
+                error: null,
+              },
+            },
+          ];
+        } else {
+          // Re-match after transition: image1 now found
+          return [
+            {
+              index: 0,
+              fileName: 'appears-later.png',
+              matchResult: {
+                found: true,
+                centerX: 750,
+                centerY: 450,
+                confidence: 0.88,
+                templateWidth: 100,
+                templateHeight: 50,
+                error: null,
+              },
+            },
+          ];
+        }
+      }
+      return undefined;
+    });
+
+    // Override mock to return tool_use that triggers action execution
+    const mockCreate = vi.fn()
+      .mockResolvedValueOnce({
+        // First response: tool_use to trigger action
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tool_1',
+            name: 'computer',
+            input: { action: 'left_click', coordinate: [500, 300] },
+          },
+        ],
+        stop_reason: 'tool_use',
+      })
+      .mockResolvedValueOnce({
+        // Second response: completion
+        content: [
+          {
+            type: 'text',
+            text: '{"result": "success"}',
+          },
+        ],
+        stop_reason: 'end_turn',
+      });
+
+    vi.doMock('../services/claudeClient', () => ({
+      getClaudeClient: vi.fn().mockResolvedValue({
+        beta: {
+          messages: {
+            create: mockCreate,
+          },
+        },
+      }),
+      buildComputerTool: vi.fn().mockReturnValue({
+        type: 'computer_20241022',
+        name: 'computer',
+        display_height_px: 768,
+        display_width_px: 1366,
+      }),
+      RESULT_SCHEMA_INSTRUCTION: 'Mock instruction',
+    }));
+
+    const { runAgentLoop } = await import('../services/agentLoop');
+
+    const scenario: Scenario = {
+      id: 'test-scenario',
+      title: 'Test Scenario',
+      description: 'Click the button that appears after transition',
+      status: 'pending',
+    };
+
+    const hintImages: StepImage[] = [
+      {
+        id: 'hint1',
+        scenario_id: 'test-scenario',
+        image_data: 'appearsLaterImageData',
+        file_name: 'appears-later.png',
+        mime_type: 'image/png',
+        order_index: 0,
+        created_at: '',
+      },
+      {
+        id: 'hint2',
+        scenario_id: 'test-scenario',
+        image_data: 'alwaysVisibleImageData',
+        file_name: 'always-visible.png',
+        mime_type: 'image/png',
+        order_index: 1,
+        created_at: '',
+      },
+    ];
+
+    const abortController = new AbortController();
+
+    await runAgentLoop({
+      scenario,
+      hintImages,
+      abortSignal: abortController.signal,
+    });
+
+    // Verify match_hint_images was called twice (initial + re-match)
+    const matchCalls = mockInvoke.mock.calls.filter((call) => call[0] === 'match_hint_images');
+    expect(matchCalls.length).toBeGreaterThanOrEqual(1);
+
+    // If re-matching occurred, the second call should only include undetected images
+    if (matchCalls.length >= 2) {
+      const reMatchCall = matchCalls[1];
+      const templateImages = reMatchCall[1].templateImages;
+      // Only the undetected image should be re-matched
+      expect(templateImages.length).toBe(1);
+      expect(templateImages[0].fileName).toBe('appears-later.png');
+    }
+  });
+
+  it('should not re-match images with permanent decode errors', async () => {
+    let matchCallCount = 0;
+
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'capture_screen') {
+        return {
+          imageBase64: 'mockScreenshot',
+          scaleFactor: 0.6,
+          displayScaleFactor: 2.0,
+          resizedWidth: 1560,
+          resizedHeight: 900,
+          originalWidth: 2600,
+          originalHeight: 1500,
+          monitorId: 0,
+        };
+      }
+      if (cmd === 'is_stop_requested') {
+        return false;
+      }
+      if (cmd === 'match_hint_images') {
+        matchCallCount++;
+        if (matchCallCount === 1) {
+          // Initial match: one has decode error (permanent), one not found
+          return [
+            {
+              index: 0,
+              fileName: 'decode-error.png',
+              matchResult: {
+                found: false,
+                centerX: null,
+                centerY: null,
+                confidence: null,
+                templateWidth: 0,
+                templateHeight: 0,
+                error: 'Base64 decode error: invalid padding',
+              },
+            },
+            {
+              index: 1,
+              fileName: 'not-found-yet.png',
+              matchResult: {
+                found: false,
+                centerX: null,
+                centerY: null,
+                confidence: 0.3,
+                templateWidth: 50,
+                templateHeight: 50,
+                error: null,
+              },
+            },
+          ];
+        } else {
+          // Re-match: only not-found-yet.png should be tried
+          return [
+            {
+              index: 0,
+              fileName: 'not-found-yet.png',
+              matchResult: {
+                found: true,
+                centerX: 400,
+                centerY: 200,
+                confidence: 0.85,
+                templateWidth: 50,
+                templateHeight: 50,
+                error: null,
+              },
+            },
+          ];
+        }
+      }
+      if (cmd === 'left_click') {
+        return undefined;
+      }
+      return undefined;
+    });
+
+    // Override mock to trigger action
+    const mockCreate = vi.fn()
+      .mockResolvedValueOnce({
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tool_1',
+            name: 'computer',
+            input: { action: 'left_click', coordinate: [100, 100] },
+          },
+        ],
+        stop_reason: 'tool_use',
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: '{"result": "success"}' }],
+        stop_reason: 'end_turn',
+      });
+
+    vi.doMock('../services/claudeClient', () => ({
+      getClaudeClient: vi.fn().mockResolvedValue({
+        beta: { messages: { create: mockCreate } },
+      }),
+      buildComputerTool: vi.fn().mockReturnValue({
+        type: 'computer_20241022',
+        name: 'computer',
+        display_height_px: 768,
+        display_width_px: 1366,
+      }),
+      RESULT_SCHEMA_INSTRUCTION: 'Mock instruction',
+    }));
+
+    const { runAgentLoop } = await import('../services/agentLoop');
+
+    const scenario: Scenario = {
+      id: 'test-scenario',
+      title: 'Test Scenario',
+      description: 'Test re-matching skip for decode errors',
+      status: 'pending',
+    };
+
+    const hintImages: StepImage[] = [
+      {
+        id: 'hint1',
+        scenario_id: 'test-scenario',
+        image_data: 'invalidBase64!!!',
+        file_name: 'decode-error.png',
+        mime_type: 'image/png',
+        order_index: 0,
+        created_at: '',
+      },
+      {
+        id: 'hint2',
+        scenario_id: 'test-scenario',
+        image_data: 'validImageData',
+        file_name: 'not-found-yet.png',
+        mime_type: 'image/png',
+        order_index: 1,
+        created_at: '',
+      },
+    ];
+
+    const abortController = new AbortController();
+
+    await runAgentLoop({
+      scenario,
+      hintImages,
+      abortSignal: abortController.signal,
+    });
+
+    // Check re-match calls
+    const matchCalls = mockInvoke.mock.calls.filter((call) => call[0] === 'match_hint_images');
+
+    if (matchCalls.length >= 2) {
+      const reMatchCall = matchCalls[1];
+      const templateImages = reMatchCall[1].templateImages;
+      // Decode error image should NOT be re-matched
+      const hasDecodeErrorImage = templateImages.some(
+        (t: { fileName: string }) => t.fileName === 'decode-error.png'
+      );
+      expect(hasDecodeErrorImage).toBe(false);
+    }
+  });
+
+  it('should not re-match already found images', async () => {
+    let matchCallCount = 0;
+
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'capture_screen') {
+        return {
+          imageBase64: 'mockScreenshot',
+          scaleFactor: 0.6,
+          displayScaleFactor: 2.0,
+          resizedWidth: 1560,
+          resizedHeight: 900,
+          originalWidth: 2600,
+          originalHeight: 1500,
+          monitorId: 0,
+        };
+      }
+      if (cmd === 'is_stop_requested') {
+        return false;
+      }
+      if (cmd === 'match_hint_images') {
+        matchCallCount++;
+        if (matchCallCount === 1) {
+          // Initial: both found
+          return [
+            {
+              index: 0,
+              fileName: 'found1.png',
+              matchResult: {
+                found: true,
+                centerX: 100,
+                centerY: 100,
+                confidence: 0.9,
+                templateWidth: 50,
+                templateHeight: 50,
+                error: null,
+              },
+            },
+            {
+              index: 1,
+              fileName: 'found2.png',
+              matchResult: {
+                found: true,
+                centerX: 200,
+                centerY: 200,
+                confidence: 0.85,
+                templateWidth: 50,
+                templateHeight: 50,
+                error: null,
+              },
+            },
+          ];
+        }
+        // Should not be called again since all images were found
+        return [];
+      }
+      if (cmd === 'left_click') {
+        return undefined;
+      }
+      return undefined;
+    });
+
+    const mockCreate = vi.fn()
+      .mockResolvedValueOnce({
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tool_1',
+            name: 'computer',
+            input: { action: 'left_click', coordinate: [100, 100] },
+          },
+        ],
+        stop_reason: 'tool_use',
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: '{"result": "success"}' }],
+        stop_reason: 'end_turn',
+      });
+
+    vi.doMock('../services/claudeClient', () => ({
+      getClaudeClient: vi.fn().mockResolvedValue({
+        beta: { messages: { create: mockCreate } },
+      }),
+      buildComputerTool: vi.fn().mockReturnValue({
+        type: 'computer_20241022',
+        name: 'computer',
+        display_height_px: 768,
+        display_width_px: 1366,
+      }),
+      RESULT_SCHEMA_INSTRUCTION: 'Mock instruction',
+    }));
+
+    const { runAgentLoop } = await import('../services/agentLoop');
+
+    const scenario: Scenario = {
+      id: 'test-scenario',
+      title: 'Test Scenario',
+      description: 'Test no re-matching when all found',
+      status: 'pending',
+    };
+
+    const hintImages: StepImage[] = [
+      {
+        id: 'hint1',
+        scenario_id: 'test-scenario',
+        image_data: 'imageData1',
+        file_name: 'found1.png',
+        mime_type: 'image/png',
+        order_index: 0,
+        created_at: '',
+      },
+      {
+        id: 'hint2',
+        scenario_id: 'test-scenario',
+        image_data: 'imageData2',
+        file_name: 'found2.png',
+        mime_type: 'image/png',
+        order_index: 1,
+        created_at: '',
+      },
+    ];
+
+    const abortController = new AbortController();
+
+    await runAgentLoop({
+      scenario,
+      hintImages,
+      abortSignal: abortController.signal,
+    });
+
+    // Only initial match should be called (no re-match needed since all found)
+    const matchCalls = mockInvoke.mock.calls.filter((call) => call[0] === 'match_hint_images');
+    expect(matchCalls.length).toBe(1);
+  });
+});

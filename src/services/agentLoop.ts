@@ -150,6 +150,10 @@ export async function runAgentLoop(
   // Previous screenshot for screen change detection
   let previousScreenshotBase64 = '';
 
+  // Track hint image match results for re-matching undetected images
+  // Key: index (original order), Value: latest match result
+  let hintImageMatchResults: Map<number, HintImageMatchResult> = new Map();
+
   try {
     // Extract expected actions from scenario
     log('[Agent Loop] Extracting expected actions from scenario...');
@@ -227,6 +231,11 @@ export async function runAgentLoop(
           .forEach((r) =>
             log(`[Agent Loop] Template match error for ${r.fileName}: ${r.matchResult.error}`)
           );
+
+        // Store initial match results for re-matching later
+        for (const result of matchResults) {
+          hintImageMatchResults.set(result.index, result);
+        }
       } catch (error) {
         // Unexpected Rust-side error (should not normally occur) - continue without coordinates
         log(`[Agent Loop] Template matching unexpected error, continuing without coordinates: ${error}`);
@@ -737,14 +746,86 @@ export async function runAgentLoop(
           };
         }
 
+        // Re-match undetected hint images against new screenshot
+        // This catches elements that appear after screen transitions
+        let updatedCoordinatesText = '';
+        if (options.hintImages && options.hintImages.length > 0 && hintImageMatchResults.size > 0) {
+          // Find images that were not detected previously (found=false and no permanent error)
+          const undetectedImages = options.hintImages.filter((_img, idx) => {
+            const prevResult = hintImageMatchResults.get(idx);
+            // Re-try if: not found previously, or had a transient error (not decode error)
+            // Skip permanent errors like base64 decode failures
+            if (!prevResult) return true; // No previous result, try matching
+            if (prevResult.matchResult.found) return false; // Already found
+            if (prevResult.matchResult.error?.includes('decode')) return false; // Permanent error
+            return true; // Not found, re-try
+          });
+
+          if (undetectedImages.length > 0) {
+            try {
+              const reMatchResults = await invoke<HintImageMatchResult[]>('match_hint_images', {
+                screenshotBase64: captureResult.imageBase64,
+                templateImages: undetectedImages.map((img) => ({
+                  imageData: img.image_data,
+                  fileName: img.file_name,
+                })),
+                scaleFactor: captureResult.scaleFactor,
+                confidenceThreshold: 0.7,
+              });
+
+              // Update stored results with new matches
+              let newlyFoundCount = 0;
+              for (const result of reMatchResults) {
+                // Find original index from hintImages array
+                const originalIndex = options.hintImages.findIndex(
+                  (img) => img.file_name === result.fileName
+                );
+                if (originalIndex !== -1) {
+                  // Update with correct original index
+                  const updatedResult = { ...result, index: originalIndex };
+                  hintImageMatchResults.set(originalIndex, updatedResult);
+                  if (result.matchResult.found) {
+                    newlyFoundCount++;
+                  }
+                }
+              }
+
+              if (newlyFoundCount > 0) {
+                log(`[Agent Loop] Re-matching found ${newlyFoundCount} new hint image(s)`);
+
+                // Build updated coordinates text from all found images
+                const allFoundCoordinates = Array.from(hintImageMatchResults.values())
+                  .filter((r) => r.matchResult.found && !r.matchResult.error)
+                  .sort((a, b) => a.index - b.index)
+                  .map(
+                    (r) =>
+                      `画像${r.index + 1}(${r.fileName}): ${r.matchResult.centerX},${r.matchResult.centerY}`
+                  )
+                  .join(' / ');
+
+                if (allFoundCoordinates) {
+                  updatedCoordinatesText = `\n\n【更新された座標情報】\n${allFoundCoordinates}`;
+                }
+              }
+            } catch (error) {
+              // Re-matching failed, continue without update
+              log(`[Agent Loop] Re-matching error (continuing): ${error}`);
+            }
+          }
+        }
+
         // Build tool result
+        const toolResultText = updatedCoordinatesText
+          ? `Action executed successfully${updatedCoordinatesText}`
+          : 'Action executed successfully';
+
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUse.id,
           content: [
             {
               type: 'text',
-              text: 'Action executed successfully',
+              text: toolResultText,
             },
             {
               type: 'image',
