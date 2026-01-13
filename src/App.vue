@@ -4,6 +4,8 @@ import { invoke } from '@tauri-apps/api/core';
 import ScenarioList from './components/ScenarioList.vue';
 import ScenarioForm from './components/ScenarioForm.vue';
 import DeleteConfirmDialog from './components/DeleteConfirmDialog.vue';
+import LoginPage from './components/LoginPage.vue';
+import { checkAuth, getSupabaseClient } from './services/authService';
 import {
   getAllScenarios,
   createScenario,
@@ -17,6 +19,10 @@ import {
 import { runSelectedScenarios, scenarioRunner } from './services/scenarioRunner';
 import { openResultWindow } from './services/resultWindowService';
 import type { StoredScenario, PermissionStatus, StepImage, FormImageData } from './types';
+
+// Authentication state
+const isAuthenticated = ref(false);
+const isCheckingAuth = ref(true);
 
 // State
 const scenarios = ref<StoredScenario[]>([]);
@@ -49,6 +55,35 @@ const canExecute = computed(
 // Lifecycle
 onMounted(async () => {
   try {
+    // Check authentication state
+    isAuthenticated.value = await checkAuth();
+
+    if (isAuthenticated.value) {
+      // If authenticated, initialize the app
+      await initializeApp();
+    }
+
+    // Watch for session changes
+    const client = await getSupabaseClient();
+    client.auth.onAuthStateChange((event, session) => {
+      isAuthenticated.value = session !== null;
+      if (event === 'SIGNED_OUT') {
+        // Clear state on sign out
+        scenarios.value = [];
+        selectedIds.value = new Set();
+      }
+    });
+  } catch (error) {
+    console.error('Auth check error:', error);
+    // On auth check failure, keep as unauthenticated
+    isAuthenticated.value = false;
+  } finally {
+    isCheckingAuth.value = false;
+  }
+});
+
+async function initializeApp() {
+  try {
     // Check permissions
     permissionStatus.value = await invoke<PermissionStatus>('check_permissions');
     // Check API key
@@ -62,7 +97,12 @@ onMounted(async () => {
     errorMessage.value =
       error instanceof Error ? error.message : String(error);
   }
-});
+}
+
+async function handleAuthenticated() {
+  isAuthenticated.value = true;
+  await initializeApp();
+}
 
 onUnmounted(async () => {
   await scenarioRunner.destroy();
@@ -283,7 +323,20 @@ function addLog(message: string) {
 </script>
 
 <template>
-  <main class="container">
+  <!-- Loading state -->
+  <div v-if="isCheckingAuth" class="loading-container">
+    <div class="loading-spinner"></div>
+    <p>読み込み中...</p>
+  </div>
+
+  <!-- Login page -->
+  <LoginPage
+    v-else-if="!isAuthenticated"
+    @authenticated="handleAuthenticated"
+  />
+
+  <!-- Main application -->
+  <main v-else class="container">
     <img src="/logo.png" alt="Xenotester" class="app-logo" />
 
     <!-- Permission Warning -->
@@ -602,5 +655,36 @@ h2 {
 .log-empty {
   color: #666;
   font-style: italic;
+}
+
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background-color: #f6f6f6;
+  color: #666;
+}
+
+@media (prefers-color-scheme: dark) {
+  .loading-container {
+    background-color: #1a1a1a;
+    color: #aaa;
+  }
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid #ddd;
+  border-top-color: #24c8db;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 16px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 </style>

@@ -40,6 +40,7 @@ pub fn run() {
     tauri::Builder::default()
         // Initialize plugins
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_oauth::init())
         // SQLite plugin with migrations
         .plugin(
             tauri_plugin_sql::Builder::default()
@@ -87,6 +88,7 @@ pub fn run() {
             // Config commands
             config::get_api_key,
             config::is_api_key_configured,
+            config::get_supabase_config,
             // Template matching commands
             template_match::match_hint_images,
         ])

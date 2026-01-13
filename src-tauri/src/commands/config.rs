@@ -2,6 +2,23 @@
 
 use std::env;
 
+#[derive(serde::Serialize)]
+pub struct SupabaseConfig {
+    pub url: String,
+    pub anon_key: String,
+}
+
+/// Get Supabase configuration from environment variables
+#[tauri::command]
+pub fn get_supabase_config() -> Result<SupabaseConfig, String> {
+    let url = env::var("SUPABASE_URL")
+        .map_err(|_| "SUPABASE_URL is not set")?;
+    let anon_key = env::var("SUPABASE_ANON_KEY")
+        .map_err(|_| "SUPABASE_ANON_KEY is not set")?;
+
+    Ok(SupabaseConfig { url, anon_key })
+}
+
 /// Get API key by name
 /// Supported keys: "anthropic", "gemini"
 #[tauri::command]

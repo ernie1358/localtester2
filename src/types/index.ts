@@ -7,3 +7,4 @@ export * from './capture';
 export * from './database';
 export * from './scenario';
 export * from './testResult';
+export * from './auth';

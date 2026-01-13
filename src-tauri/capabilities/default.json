@@ -5,7 +5,12 @@
   "windows": ["main", "result"],
   "permissions": [
     "core:default",
+    "core:window:allow-create",
+    "core:window:allow-set-focus",
+    "core:webview:allow-create-webview-window",
+    "core:event:default",
     "opener:default",
+    "oauth:default",
     "sql:default",
     "sql:allow-load",
     "sql:allow-execute",
