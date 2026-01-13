@@ -755,16 +755,27 @@ export async function runAgentLoop(
         // even when initial matching failed (empty result or exception)
         if (options.hintImages && options.hintImages.length > 0) {
           // Helper: Check if error is permanent (won't resolve with different screenshots)
+          // Note: "Screenshot decode error" is NOT permanent as it may succeed with a different screenshot
           const isPermanentError = (error: string | null | undefined): boolean => {
             if (!error) return false;
-            // decode errors: base64 decode failures (image data is corrupted)
+            // Template-side decode errors: base64/image decode failures (template data is corrupted)
+            // These are permanent because the template itself is invalid
+            // Note: "Screenshot decode error" is excluded - it may succeed with next screenshot
+            if (error.includes('Base64 decode error') || error.includes('Image decode error')) {
+              return true;
+            }
             // opacity errors: template has insufficient opacity (transparent images)
-            // larger than screenshot: template dimensions exceed screenshot (after scaling)
-            return (
-              error.includes('decode') ||
-              error.includes('insufficient opacity') ||
-              error.includes('larger than screenshot')
-            );
+            // This is permanent because the template itself has this characteristic
+            if (error.includes('insufficient opacity')) {
+              return true;
+            }
+            return false;
+          };
+
+          // Helper: Check if error is size-related (may resolve when screen changes)
+          const isSizeRelatedError = (error: string | null | undefined): boolean => {
+            if (!error) return false;
+            return error.includes('larger than screenshot');
           };
 
           // Find images to re-match based on screen change status
@@ -775,6 +786,15 @@ export async function runAgentLoop(
 
             // Skip images with permanent errors (won't resolve regardless of screenshot)
             if (prevResult?.matchResult.error && isPermanentError(prevResult.matchResult.error)) {
+              return;
+            }
+
+            // Size-related errors may resolve when screen changes (different resolution/scale)
+            // Only retry if screen has changed
+            if (prevResult?.matchResult.error && isSizeRelatedError(prevResult.matchResult.error)) {
+              if (screenChanged) {
+                imagesToRematchWithIndex.push({ img, originalIndex: idx });
+              }
               return;
             }
 

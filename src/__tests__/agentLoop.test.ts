@@ -1699,14 +1699,14 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
     expect(matchCallCount).toBeGreaterThanOrEqual(1);
   });
 
-  // SKIP: This test requires hasSignificantScreenChange to return { changed: true },
-  // but Vitest's module caching prevents per-test mock overrides from working correctly.
-  // The functionality is verified through:
-  // 1. Code review of the screenChanged condition at agentLoop.ts:784
-  // 2. The "should not re-match already found images when screen unchanged" test
-  //    (confirms the inverse behavior works correctly)
-  // TODO: Restructure test file or create separate test file with different mock config
-  it.skip('should re-match already found images when screen changes to update coordinates', async () => {
+  // MOVED: This test has been moved to agentLoop.screenChange.test.ts
+  // because it requires hasSignificantScreenChange to return { changed: true },
+  // and Vitest's module caching prevents per-test mock overrides from working correctly.
+  // See agentLoop.screenChange.test.ts for the following tests:
+  // - 'should re-match already found images when screen changes to update coordinates'
+  // - 'should retry size-related errors when screen changes'
+  // - 'should retry Screenshot decode errors on subsequent screenshots'
+  it.skip('[MOVED TO agentLoop.screenChange.test.ts] should re-match already found images when screen changes', async () => {
     // This test verifies that when screenChanged=true,
     // already found images ARE re-matched to update coordinates that may have shifted.
     //
@@ -1854,9 +1854,10 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
     hasSignificantScreenChangeSpy.mockReturnValue({ changed: false, diffRatio: 0, isNoise: false });
   });
 
-  it('should not re-match images with permanent opacity or size errors', async () => {
-    // This test verifies that images with permanent errors (opacity/size issues)
-    // are excluded from re-matching, unlike transient errors.
+  it('should not re-match images with permanent opacity errors or size errors when screen unchanged', async () => {
+    // This test verifies that images with permanent errors (opacity issues)
+    // or size-related errors (when screen is unchanged) are excluded from re-matching.
+    // Note: Size-related errors ARE retried when screen changes (tested in agentLoop.screenChange.test.ts)
     let matchCallCount = 0;
 
     mockInvoke.mockImplementation(async (cmd: string) => {
