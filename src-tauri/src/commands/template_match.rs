@@ -2,7 +2,7 @@
 //!
 //! Provides Tauri commands for matching hint images against screenshots.
 
-use crate::services::template_matcher::{find_template_in_screenshot, MatchResult};
+use crate::services::template_matcher::{match_templates_batch, MatchResult};
 use serde::{Deserialize, Serialize};
 
 /// Input template image data
@@ -43,6 +43,11 @@ pub struct HintImageMatchResult {
 /// Individual image decode/matching failures are captured in `MatchResult.error`
 /// rather than failing the entire command. This ensures that one corrupted hint
 /// image doesn't prevent coordinates from being detected for other valid images.
+///
+/// # Performance Optimization
+/// Screenshot is decoded and converted to grayscale only once, then reused
+/// for all template matches. This significantly reduces CPU/memory usage
+/// when matching multiple hint images.
 #[tauri::command]
 pub fn match_hint_images(
     screenshot_base64: String,
@@ -52,23 +57,35 @@ pub fn match_hint_images(
 ) -> Vec<HintImageMatchResult> {
     let threshold = confidence_threshold.unwrap_or(0.7);
 
-    template_images
+    // Collect templates with indices for batch processing
+    let templates_with_indices: Vec<(usize, &str, &str)> = template_images
+        .iter()
+        .enumerate()
+        .map(|(index, t)| (index, t.image_data.as_str(), t.file_name.as_str()))
+        .collect();
+
+    // Create tuples for batch processing (image_data, file_name)
+    let templates: Vec<(&str, &str)> = templates_with_indices
+        .iter()
+        .map(|(_, data, name)| (*data, *name))
+        .collect();
+
+    // Process all templates with single screenshot decode
+    let batch_results = match_templates_batch(
+        &screenshot_base64,
+        templates,
+        scale_factor,
+        threshold,
+    );
+
+    // Rebuild results with original indices
+    batch_results
         .into_iter()
         .enumerate()
-        .map(|(index, template)| {
-            // Each image is processed independently - errors are captured per-image
-            let match_result = find_template_in_screenshot(
-                &screenshot_base64,
-                &template.image_data,
-                scale_factor,
-                threshold,
-            );
-
-            HintImageMatchResult {
-                index,
-                file_name: template.file_name,
-                match_result,
-            }
+        .map(|(index, (file_name, match_result))| HintImageMatchResult {
+            index,
+            file_name,
+            match_result,
         })
         .collect()
 }
