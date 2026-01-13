@@ -42,6 +42,7 @@ import type {
   ProgressTracker,
   StepImage,
   HintImageMatchResult,
+  MatchErrorCode,
 } from '../types';
 import { DEFAULT_AGENT_LOOP_CONFIG, DEFAULT_CLAUDE_MODEL_CONFIG } from '../types';
 
@@ -754,28 +755,39 @@ export async function runAgentLoop(
         // NOTE: Removed hintImageMatchResults.size > 0 guard to allow re-matching
         // even when initial matching failed (empty result or exception)
         if (options.hintImages && options.hintImages.length > 0) {
+          // Permanent error codes that won't resolve with different screenshots
+          const PERMANENT_ERROR_CODES: MatchErrorCode[] = [
+            'template_base64_decode_error',
+            'template_image_decode_error',
+            'insufficient_opacity',
+            'non_finite_confidence',
+          ];
+
+          // Size-related error codes that may resolve when screen changes
+          const SIZE_RELATED_ERROR_CODES: MatchErrorCode[] = [
+            'template_too_large',
+          ];
+
           // Helper: Check if error is permanent (won't resolve with different screenshots)
-          // Note: "Screenshot decode error" is NOT permanent as it may succeed with a different screenshot
-          const isPermanentError = (error: string | null | undefined): boolean => {
+          // Uses error code for robust detection, with fallback to message parsing for compatibility
+          const isPermanentError = (errorCode: MatchErrorCode | null | undefined, error: string | null | undefined): boolean => {
+            // Prefer error code for robust detection
+            if (errorCode) {
+              return PERMANENT_ERROR_CODES.includes(errorCode);
+            }
+            // Fallback to message parsing for backward compatibility
             if (!error) return false;
             // IMPORTANT: Screenshot decode errors are transient - they may succeed with a different screenshot
-            // This check MUST come before Base64/Image decode error checks because screenshot errors
-            // may contain these substrings (e.g., "Screenshot decode error: Image processing error: Base64 decode error: ...")
             if (error.includes('Screenshot decode error')) {
               return false;
             }
-            // Template-side decode errors: base64/image decode failures (template data is corrupted)
-            // These are permanent because the template itself is invalid
+            // Template-side decode errors
             if (error.includes('Base64 decode error') || error.includes('Image decode error')) {
               return true;
             }
-            // opacity errors: template has insufficient opacity (transparent images)
-            // This is permanent because the template itself has this characteristic
             if (error.includes('insufficient opacity')) {
               return true;
             }
-            // Non-finite confidence: template has insufficient variance (e.g., single-color image)
-            // This is permanent because the template itself lacks distinctive features
             if (error.includes('non-finite confidence')) {
               return true;
             }
@@ -783,7 +795,12 @@ export async function runAgentLoop(
           };
 
           // Helper: Check if error is size-related (may resolve when screen changes)
-          const isSizeRelatedError = (error: string | null | undefined): boolean => {
+          const isSizeRelatedError = (errorCode: MatchErrorCode | null | undefined, error: string | null | undefined): boolean => {
+            // Prefer error code for robust detection
+            if (errorCode) {
+              return SIZE_RELATED_ERROR_CODES.includes(errorCode);
+            }
+            // Fallback to message parsing for backward compatibility
             if (!error) return false;
             return error.includes('larger than screenshot');
           };
@@ -795,13 +812,13 @@ export async function runAgentLoop(
             const prevResult = hintImageMatchResults.get(idx);
 
             // Skip images with permanent errors (won't resolve regardless of screenshot)
-            if (prevResult?.matchResult.error && isPermanentError(prevResult.matchResult.error)) {
+            if (prevResult?.matchResult.error && isPermanentError(prevResult.matchResult.errorCode, prevResult.matchResult.error)) {
               return;
             }
 
             // Size-related errors may resolve when screen changes (different resolution/scale)
             // Only retry if screen has changed
-            if (prevResult?.matchResult.error && isSizeRelatedError(prevResult.matchResult.error)) {
+            if (prevResult?.matchResult.error && isSizeRelatedError(prevResult.matchResult.errorCode, prevResult.matchResult.error)) {
               if (screenChanged) {
                 imagesToRematchWithIndex.push({ img, originalIndex: idx });
               }

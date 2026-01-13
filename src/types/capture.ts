@@ -32,6 +32,18 @@ export interface PermissionStatus {
   accessibility: boolean;
 }
 
+/**
+ * Error codes for template matching failures.
+ * These codes allow programmatic error handling without parsing error messages.
+ */
+export type MatchErrorCode =
+  | 'screenshot_decode_error'      // Screenshot could not be decoded (transient)
+  | 'template_base64_decode_error' // Template base64 data is corrupted (permanent)
+  | 'template_image_decode_error'  // Template image format is invalid (permanent)
+  | 'insufficient_opacity'         // Template is too transparent (permanent)
+  | 'non_finite_confidence'        // Template lacks variance (permanent)
+  | 'template_too_large';          // Template larger than screenshot (size-related)
+
 /** Result of template matching for a single hint image */
 export interface HintImageMatchResult {
   /** Index of the hint image in the original array */
@@ -54,5 +66,7 @@ export interface HintImageMatchResult {
     templateHeight: number;
     /** Error message if matching failed for this specific image */
     error: string | null;
+    /** Error code for programmatic error handling (use this instead of parsing error message) */
+    errorCode: MatchErrorCode | null;
   };
 }

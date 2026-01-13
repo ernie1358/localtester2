@@ -6,7 +6,7 @@ use crate::services::template_matcher::{match_templates_batch, MatchResult};
 use serde::{Deserialize, Serialize};
 
 /// Input template image data
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TemplateImage {
     /// Base64 encoded image data (original size)
@@ -48,38 +48,56 @@ pub struct HintImageMatchResult {
 /// Screenshot is decoded and converted to grayscale only once, then reused
 /// for all template matches. This significantly reduces CPU/memory usage
 /// when matching multiple hint images.
+///
+/// # Threading Model
+/// This command is async and uses `spawn_blocking` to offload CPU-intensive
+/// template matching to a worker thread, preventing UI blocking.
 #[tauri::command]
-pub fn match_hint_images(
+pub async fn match_hint_images(
     screenshot_base64: String,
     template_images: Vec<TemplateImage>,
     scale_factor: f64,
     confidence_threshold: Option<f32>,
-) -> Vec<HintImageMatchResult> {
+) -> Result<Vec<HintImageMatchResult>, String> {
     let threshold = confidence_threshold.unwrap_or(0.7);
 
-    // Create tuples for batch processing (image_data, file_name)
-    // Note: Output index corresponds to input array order (0, 1, 2, ...)
-    let templates: Vec<(&str, &str)> = template_images
-        .iter()
-        .map(|t| (t.image_data.as_str(), t.file_name.as_str()))
+    // Clone data for the blocking task
+    let screenshot = screenshot_base64;
+    let templates_owned: Vec<(String, String)> = template_images
+        .into_iter()
+        .map(|t| (t.image_data, t.file_name))
         .collect();
 
-    // Process all templates with single screenshot decode
-    let batch_results = match_templates_batch(
-        &screenshot_base64,
-        templates,
-        scale_factor,
-        threshold,
-    );
+    // Offload CPU-intensive template matching to a worker thread
+    // This prevents blocking the Tauri main thread and keeps UI responsive
+    let results = tauri::async_runtime::spawn_blocking(move || {
+        // Create references for batch processing
+        let templates: Vec<(&str, &str)> = templates_owned
+            .iter()
+            .map(|(data, name)| (data.as_str(), name.as_str()))
+            .collect();
 
-    // Rebuild results with array index (matches input order)
-    batch_results
-        .into_iter()
-        .enumerate()
-        .map(|(index, (file_name, match_result))| HintImageMatchResult {
-            index,
-            file_name,
-            match_result,
-        })
-        .collect()
+        // Process all templates with single screenshot decode
+        let batch_results = match_templates_batch(
+            &screenshot,
+            templates,
+            scale_factor,
+            threshold,
+        );
+
+        // Rebuild results with array index (matches input order)
+        batch_results
+            .into_iter()
+            .enumerate()
+            .map(|(index, (file_name, match_result))| HintImageMatchResult {
+                index,
+                file_name,
+                match_result,
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|e| format!("Template matching task failed: {}", e))?;
+
+    Ok(results)
 }

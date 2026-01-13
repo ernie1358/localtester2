@@ -10,6 +10,46 @@ use serde::Serialize;
 
 use crate::error::XenotesterError;
 
+/// Error codes for template matching failures
+///
+/// These codes allow TypeScript to identify error types without parsing error messages,
+/// making the API more robust against message changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchErrorCode {
+    /// Screenshot could not be decoded (may be transient - different screenshot may work)
+    ScreenshotDecodeError,
+    /// Template base64 data could not be decoded (permanent - template data is corrupted)
+    TemplateBase64DecodeError,
+    /// Template image could not be decoded (permanent - template format is invalid)
+    TemplateImageDecodeError,
+    /// Template has insufficient opacity (permanent - template is too transparent)
+    InsufficientOpacity,
+    /// Template matching produced non-finite confidence (permanent - template lacks variance)
+    NonFiniteConfidence,
+    /// Template is larger than screenshot (may resolve when screen changes)
+    TemplateTooLarge,
+}
+
+impl MatchErrorCode {
+    /// Check if this error is permanent (won't resolve with different screenshots)
+    pub fn is_permanent(&self) -> bool {
+        match self {
+            MatchErrorCode::ScreenshotDecodeError => false,
+            MatchErrorCode::TemplateBase64DecodeError => true,
+            MatchErrorCode::TemplateImageDecodeError => true,
+            MatchErrorCode::InsufficientOpacity => true,
+            MatchErrorCode::NonFiniteConfidence => true,
+            MatchErrorCode::TemplateTooLarge => false, // May resolve when screen changes
+        }
+    }
+
+    /// Check if this error is size-related (may resolve when screen changes)
+    pub fn is_size_related(&self) -> bool {
+        matches!(self, MatchErrorCode::TemplateTooLarge)
+    }
+}
+
 /// Result of template matching for a single hint image
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +68,8 @@ pub struct MatchResult {
     pub template_height: u32,
     /// Error message if matching failed for this image
     pub error: Option<String>,
+    /// Error code for programmatic error handling (use this instead of parsing error message)
+    pub error_code: Option<MatchErrorCode>,
 }
 
 /// Find template image within screenshot and return center coordinates
@@ -63,6 +105,7 @@ pub fn find_template_in_screenshot(
             template_width: 0,
             template_height: 0,
             error: Some(e.to_string()),
+            error_code: Some(MatchErrorCode::ScreenshotDecodeError),
         },
     };
 
@@ -108,6 +151,7 @@ pub fn match_templates_batch(
                 template_width: 0,
                 template_height: 0,
                 error: Some(format!("Screenshot decode error: {}", e)),
+                error_code: Some(MatchErrorCode::ScreenshotDecodeError),
             };
             return templates
                 .into_iter()
@@ -140,18 +184,7 @@ fn find_template_with_decoded_screenshot(
     scale_factor: f64,
     confidence_threshold: f32,
 ) -> MatchResult {
-    match find_template_internal(screenshot_gray, template_base64, scale_factor, confidence_threshold) {
-        Ok(result) => result,
-        Err(e) => MatchResult {
-            found: false,
-            center_x: None,
-            center_y: None,
-            confidence: None,
-            template_width: 0,
-            template_height: 0,
-            error: Some(e.to_string()),
-        },
-    }
+    find_template_internal(screenshot_gray, template_base64, scale_factor, confidence_threshold)
 }
 
 /// Minimum opacity ratio threshold for template matching
@@ -159,16 +192,30 @@ fn find_template_with_decoded_screenshot(
 /// and will return found=false to avoid false positives
 const MIN_OPACITY_RATIO: f32 = 0.1; // At least 10% of pixels must be opaque
 
-/// Internal implementation that returns Result for error handling
+/// Internal implementation that returns MatchResult directly with error codes
 /// Uses pre-decoded grayscale screenshot for efficiency
 fn find_template_internal(
     screenshot_gray: &GrayImage,
     template_base64: &str,
     scale_factor: f64,
     confidence_threshold: f32,
-) -> Result<MatchResult, XenotesterError> {
-    // Decode template image
-    let template_original = decode_base64_image(template_base64)?;
+) -> MatchResult {
+    // Decode template image with detailed error code
+    let template_original = match decode_template_image(template_base64) {
+        Ok(img) => img,
+        Err((error_msg, error_code)) => {
+            return MatchResult {
+                found: false,
+                center_x: None,
+                center_y: None,
+                confidence: None,
+                template_width: 0,
+                template_height: 0,
+                error: Some(error_msg),
+                error_code: Some(error_code),
+            };
+        }
+    };
 
     // Scale alignment: resize hint image by same factor as screenshot
     // Screenshot is already resized (scale_factor applied)
@@ -193,7 +240,7 @@ fn find_template_internal(
     let opacity_ratio = calculate_opacity_ratio(&template);
     if opacity_ratio < MIN_OPACITY_RATIO {
         let (w, h) = template.dimensions();
-        return Ok(MatchResult {
+        return MatchResult {
             found: false,
             center_x: None,
             center_y: None,
@@ -205,7 +252,8 @@ fn find_template_internal(
                 opacity_ratio * 100.0,
                 MIN_OPACITY_RATIO * 100.0
             )),
-        });
+            error_code: Some(MatchErrorCode::InsufficientOpacity),
+        };
     }
 
     // Convert to grayscale with alpha compositing for transparent PNGs
@@ -218,7 +266,7 @@ fn find_template_internal(
 
     // Check if template is larger than screenshot (cannot match)
     if template_width > screenshot_gray.width() || template_height > screenshot_gray.height() {
-        return Ok(MatchResult {
+        return MatchResult {
             found: false,
             center_x: None,
             center_y: None,
@@ -226,7 +274,8 @@ fn find_template_internal(
             template_width,
             template_height,
             error: Some("Template is larger than screenshot after scaling".to_string()),
-        });
+            error_code: Some(MatchErrorCode::TemplateTooLarge),
+        };
     }
 
     // Perform template matching using Normalized Cross-Correlation
@@ -249,17 +298,18 @@ fn find_template_internal(
     // low-variance templates (e.g., single-color images)
     // This prevents JSON serialization failures downstream
     if !confidence.is_finite() {
-        return Ok(MatchResult {
+        return MatchResult {
             found: false,
             center_x: None,
             center_y: None,
             confidence: None,
             template_width,
             template_height,
-            error: Some(format!(
-                "Template matching produced non-finite confidence value. Template may have insufficient variance (e.g., single-color image)."
-            )),
-        });
+            error: Some(
+                "Template matching produced non-finite confidence value. Template may have insufficient variance (e.g., single-color image).".to_string()
+            ),
+            error_code: Some(MatchErrorCode::NonFiniteConfidence),
+        };
     }
 
     if confidence >= confidence_threshold {
@@ -270,7 +320,7 @@ fn find_template_internal(
         let center_x = match_x as i32 + (template_width / 2) as i32;
         let center_y = match_y as i32 + (template_height / 2) as i32;
 
-        Ok(MatchResult {
+        MatchResult {
             found: true,
             center_x: Some(center_x),
             center_y: Some(center_y),
@@ -278,9 +328,10 @@ fn find_template_internal(
             template_width,
             template_height,
             error: None,
-        })
+            error_code: None,
+        }
     } else {
-        Ok(MatchResult {
+        MatchResult {
             found: false,
             center_x: None,
             center_y: None,
@@ -288,7 +339,8 @@ fn find_template_internal(
             template_width,
             template_height,
             error: None,
-        })
+            error_code: None,
+        }
     }
 }
 
@@ -350,6 +402,28 @@ fn decode_base64_image(base64_data: &str) -> Result<DynamicImage, XenotesterErro
 
     image::load_from_memory(&bytes)
         .map_err(|e| XenotesterError::ImageError(format!("Image decode error: {}", e)))
+}
+
+/// Decode template base64 string with specific error codes for template failures
+/// Returns tuple of (error_message, error_code) on failure
+fn decode_template_image(base64_data: &str) -> Result<DynamicImage, (String, MatchErrorCode)> {
+    let bytes = match BASE64_STANDARD.decode(base64_data) {
+        Ok(b) => b,
+        Err(e) => {
+            return Err((
+                format!("Base64 decode error: {}", e),
+                MatchErrorCode::TemplateBase64DecodeError,
+            ));
+        }
+    };
+
+    match image::load_from_memory(&bytes) {
+        Ok(img) => Ok(img),
+        Err(e) => Err((
+            format!("Image decode error: {}", e),
+            MatchErrorCode::TemplateImageDecodeError,
+        )),
+    }
 }
 
 #[cfg(test)]

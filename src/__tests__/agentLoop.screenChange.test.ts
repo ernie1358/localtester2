@@ -185,6 +185,7 @@ describe('runAgentLoop - Screen Change Re-matching', () => {
                 templateWidth: 50,
                 templateHeight: 50,
                 error: null,
+                errorCode: null,
               },
             },
           ];
@@ -202,6 +203,7 @@ describe('runAgentLoop - Screen Change Re-matching', () => {
                 templateWidth: 50,
                 templateHeight: 50,
                 error: null,
+                errorCode: null,
               },
             },
           ];
@@ -314,6 +316,7 @@ describe('runAgentLoop - Screen Change Re-matching', () => {
                 templateWidth: 1000,
                 templateHeight: 800,
                 error: 'Template is larger than screenshot after scaling',
+                errorCode: 'template_too_large',
               },
             },
           ];
@@ -331,6 +334,7 @@ describe('runAgentLoop - Screen Change Re-matching', () => {
                 templateWidth: 1000,
                 templateHeight: 800,
                 error: null,
+                errorCode: null,
               },
             },
           ];
@@ -447,6 +451,7 @@ describe('runAgentLoop - Screen Change Re-matching', () => {
                 templateWidth: 0,
                 templateHeight: 0,
                 error: 'Screenshot decode error: Image processing error: Base64 decode error: invalid base64',
+                errorCode: 'screenshot_decode_error',
               },
             },
           ];
@@ -464,6 +469,7 @@ describe('runAgentLoop - Screen Change Re-matching', () => {
                 templateWidth: 100,
                 templateHeight: 80,
                 error: null,
+                errorCode: null,
               },
             },
           ];
@@ -571,6 +577,7 @@ describe('runAgentLoop - Screen Change Re-matching', () => {
                 templateWidth: 100,
                 templateHeight: 50,
                 error: null,
+                errorCode: null,
               },
             },
           ];
@@ -588,6 +595,7 @@ describe('runAgentLoop - Screen Change Re-matching', () => {
                 templateWidth: 100,
                 templateHeight: 50,
                 error: null,
+                errorCode: null,
               },
             },
           ];
@@ -736,6 +744,7 @@ describe('runAgentLoop - Screen Change Re-matching', () => {
               templateHeight: 100,
               error:
                 'Template matching produced non-finite confidence value. Template may have insufficient variance (e.g., single-color image).',
+              errorCode: 'non_finite_confidence',
             },
           },
         ];

@@ -508,6 +508,7 @@ describe('runAgentLoop - Hint Image Coordinate Detection', () => {
               templateWidth: 100,
               templateHeight: 50,
               error: null,
+              errorCode: null,
             },
           },
           {
@@ -521,6 +522,7 @@ describe('runAgentLoop - Hint Image Coordinate Detection', () => {
               templateWidth: 48,
               templateHeight: 48,
               error: null,
+              errorCode: null,
             },
           },
         ];
@@ -629,6 +631,7 @@ describe('runAgentLoop - Hint Image Coordinate Detection', () => {
               templateWidth: 100,
               templateHeight: 50,
               error: null,
+              errorCode: null,
             },
           },
           {
@@ -642,6 +645,7 @@ describe('runAgentLoop - Hint Image Coordinate Detection', () => {
               templateWidth: 80,
               templateHeight: 40,
               error: null,
+              errorCode: null,
             },
           },
         ];
@@ -739,6 +743,7 @@ describe('runAgentLoop - Hint Image Coordinate Detection', () => {
               templateWidth: 100,
               templateHeight: 50,
               error: null,
+              errorCode: null,
             },
           },
           {
@@ -752,6 +757,7 @@ describe('runAgentLoop - Hint Image Coordinate Detection', () => {
               templateWidth: 0,
               templateHeight: 0,
               error: 'Base64 decode error: invalid padding',
+              errorCode: 'template_base64_decode_error',
             },
           },
         ];
@@ -848,6 +854,7 @@ describe('runAgentLoop - Hint Image Coordinate Detection', () => {
               templateWidth: 100,
               templateHeight: 50,
               error: null,
+              errorCode: null,
             },
           },
         ];
@@ -1037,6 +1044,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
                 templateWidth: 100,
                 templateHeight: 50,
                 error: null,
+                errorCode: null,
               },
             },
             {
@@ -1050,6 +1058,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
                 templateWidth: 80,
                 templateHeight: 40,
                 error: null,
+                errorCode: null,
               },
             },
           ];
@@ -1067,6 +1076,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
                 templateWidth: 100,
                 templateHeight: 50,
                 error: null,
+                errorCode: null,
               },
             },
           ];
@@ -1204,6 +1214,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
                 templateWidth: 0,
                 templateHeight: 0,
                 error: 'Base64 decode error: invalid padding',
+                errorCode: 'template_base64_decode_error',
               },
             },
             {
@@ -1217,6 +1228,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
                 templateWidth: 50,
                 templateHeight: 50,
                 error: null,
+                errorCode: null,
               },
             },
           ];
@@ -1234,6 +1246,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
                 templateWidth: 50,
                 templateHeight: 50,
                 error: null,
+                errorCode: null,
               },
             },
           ];
@@ -1365,6 +1378,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
                 templateWidth: 50,
                 templateHeight: 50,
                 error: null,
+                errorCode: null,
               },
             },
             {
@@ -1378,6 +1392,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
                 templateWidth: 50,
                 templateHeight: 50,
                 error: null,
+                errorCode: null,
               },
             },
           ];
@@ -1494,7 +1509,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
         return templateImages.map((t, i) => ({
           index: i,
           fileName: t.fileName,
-          matchResult: { found: false, centerX: null, centerY: null, confidence: 0.3, templateWidth: 50, templateHeight: 50, error: null },
+          matchResult: { found: false, centerX: null, centerY: null, confidence: 0.3, templateWidth: 50, templateHeight: 50, error: null, errorCode: null },
         }));
       }
       return undefined;
@@ -1751,6 +1766,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
                 templateWidth: 50,
                 templateHeight: 50,
                 error: null,
+                errorCode: null,
               },
             },
           ];
@@ -1768,6 +1784,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
                 templateWidth: 50,
                 templateHeight: 50,
                 error: null,
+                errorCode: null,
               },
             },
           ];
@@ -1892,6 +1909,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
                 templateWidth: 100,
                 templateHeight: 50,
                 error: 'Template has insufficient opacity (5.0% < 10.0% minimum). Mostly transparent images cannot be reliably matched.',
+                errorCode: 'insufficient_opacity',
               },
             },
             {
@@ -1905,6 +1923,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
                 templateWidth: 2000,
                 templateHeight: 1500,
                 error: 'Template is larger than screenshot after scaling',
+                errorCode: 'template_too_large',
               },
             },
             {
@@ -1918,6 +1937,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
                 templateWidth: 50,
                 templateHeight: 50,
                 error: null,
+                errorCode: null,
               },
             },
           ];
@@ -1935,6 +1955,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
                 templateWidth: 50,
                 templateHeight: 50,
                 error: null,
+                errorCode: null,
               },
             },
           ];
