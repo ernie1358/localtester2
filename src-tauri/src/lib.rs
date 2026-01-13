@@ -9,7 +9,7 @@ pub mod services;
 pub mod state;
 pub mod utils;
 
-use commands::{config, control, input, permission, screenshot};
+use commands::{config, control, input, permission, screenshot, template_match};
 use state::AppState;
 use tauri_plugin_sql::{Migration, MigrationKind};
 use utils::hotkey::register_emergency_stop;
@@ -87,6 +87,8 @@ pub fn run() {
             // Config commands
             config::get_api_key,
             config::is_api_key_configured,
+            // Template matching commands
+            template_match::match_hint_images,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

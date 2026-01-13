@@ -29,6 +29,7 @@ enigo = { version = "0.6", features = ["wayland"] }
 
 # Image processing
 image = "0.25"
+imageproc = "0.25"  # Template matching for hint image coordinate detection
 base64 = "0.22"
 
 # Async runtime

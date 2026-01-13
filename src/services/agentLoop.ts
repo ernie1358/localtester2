@@ -41,6 +41,7 @@ import type {
   ExpectedAction,
   ProgressTracker,
   StepImage,
+  HintImageMatchResult,
 } from '../types';
 import { DEFAULT_AGENT_LOOP_CONFIG, DEFAULT_CLAUDE_MODEL_CONFIG } from '../types';
 
@@ -198,10 +199,65 @@ export async function runAgentLoop(
     // Add hint images if provided
     if (options.hintImages && options.hintImages.length > 0) {
       log(`[Agent Loop] Adding ${options.hintImages.length} hint images to request`);
+
+      // Perform template matching to detect coordinates
+      // IMPORTANT: Pass scaleFactor to align hint image scale with resized screenshot
+      let matchResults: HintImageMatchResult[] = [];
+      try {
+        matchResults = await invoke<HintImageMatchResult[]>('match_hint_images', {
+          screenshotBase64: captureResult.imageBase64,
+          templateImages: options.hintImages.map((img) => ({
+            imageData: img.image_data,
+            fileName: img.file_name,
+          })),
+          scaleFactor: captureResult.scaleFactor,
+          confidenceThreshold: 0.7,
+        });
+
+        // Log results (including errors for individual images)
+        const foundCount = matchResults.filter((r) => r.matchResult.found).length;
+        const errorCount = matchResults.filter((r) => r.matchResult.error).length;
+        log(
+          `[Agent Loop] Template matching completed: ${foundCount}/${matchResults.length} found, ${errorCount} errors`
+        );
+
+        // Log individual errors (processing continues)
+        matchResults
+          .filter((r) => r.matchResult.error)
+          .forEach((r) =>
+            log(`[Agent Loop] Template match error for ${r.fileName}: ${r.matchResult.error}`)
+          );
+      } catch (error) {
+        // Unexpected Rust-side error (should not normally occur) - continue without coordinates
+        log(`[Agent Loop] Template matching unexpected error, continuing without coordinates: ${error}`);
+      }
+
+      // Build hint text with coordinate information
+      let hintText = '\n\n【ヒント画像】\n以下は、探してほしい要素やクリック対象のキャプチャです。';
+
+      // Add coordinate information for successfully detected images
+      // IMPORTANT: Use r.index (original hint image order), not filter() index
+      // This ensures numbering stays consistent even if some images weren't detected
+      // Example: Image 1 not found, Image 2 found, Image 3 found → "画像2: 885,226 / 画像3: 223,355"
+      const detectedCoordinates = matchResults
+        .filter((r) => r.matchResult.found && !r.matchResult.error)
+        .map(
+          (r) =>
+            `画像${r.index + 1}(${r.fileName}): ${r.matchResult.centerX},${r.matchResult.centerY}`
+        )
+        .join(' / ');
+
+      if (detectedCoordinates) {
+        hintText += `\n\n【画像認識による座標（各画像の中心点）】\n${detectedCoordinates}\n\n上記の座標は画像認識で検出した位置です。これらを参考にして正確に操作してください。`;
+      } else {
+        hintText += '\nこれらを参考にして正確に操作してください：';
+      }
+
       initialMessageContent.push({
         type: 'text',
-        text: '\n\n【ヒント画像】\n以下は、探してほしい要素やクリック対象のキャプチャです。これらを参考にして正確に操作してください：',
+        text: hintText,
       });
+
       for (const hintImage of options.hintImages) {
         initialMessageContent.push({
           type: 'image',

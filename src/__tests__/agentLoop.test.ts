@@ -113,17 +113,26 @@ describe('runAgentLoop - Hint Image Message Construction', () => {
     vi.clearAllMocks();
     capturedMessages = [];
 
-    // Default mock for capture_screen
+    // Default mock for capture_screen and match_hint_images
     mockInvoke.mockImplementation(async (cmd: string) => {
       if (cmd === 'capture_screen') {
         return {
           imageBase64: 'mockScreenshotBase64Data',
           scaleFactor: 1.0,
           displayScaleFactor: 2.0,
+          resizedWidth: 1366,
+          resizedHeight: 768,
+          originalWidth: 1366,
+          originalHeight: 768,
+          monitorId: 0,
         };
       }
       if (cmd === 'is_stop_requested') {
         return false;
+      }
+      if (cmd === 'match_hint_images') {
+        // Default: return empty array (no matches found)
+        return [];
       }
       return undefined;
     });
@@ -454,6 +463,527 @@ describe('runAgentLoop - Hint Image Message Construction', () => {
       expect(getImageData(imageBlocks[0])).toBe('firstImageData');
       expect(getImageData(imageBlocks[1])).toBe('secondImageData');
       expect(getImageData(imageBlocks[2])).toBe('thirdImageData');
+    }
+  });
+});
+
+describe('runAgentLoop - Hint Image Coordinate Detection', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedMessages = [];
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+  });
+
+  it('should include detected coordinates in hint text when template matching succeeds', async () => {
+    // Mock match_hint_images to return successful matches
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'capture_screen') {
+        return {
+          imageBase64: 'mockScreenshotBase64Data',
+          scaleFactor: 0.6,
+          displayScaleFactor: 2.0,
+          resizedWidth: 1560,
+          resizedHeight: 900,
+          originalWidth: 2600,
+          originalHeight: 1500,
+          monitorId: 0,
+        };
+      }
+      if (cmd === 'is_stop_requested') {
+        return false;
+      }
+      if (cmd === 'match_hint_images') {
+        return [
+          {
+            index: 0,
+            fileName: 'button.png',
+            matchResult: {
+              found: true,
+              centerX: 885,
+              centerY: 226,
+              confidence: 0.85,
+              templateWidth: 100,
+              templateHeight: 50,
+              error: null,
+            },
+          },
+          {
+            index: 1,
+            fileName: 'icon.png',
+            matchResult: {
+              found: true,
+              centerX: 223,
+              centerY: 355,
+              confidence: 0.92,
+              templateWidth: 48,
+              templateHeight: 48,
+              error: null,
+            },
+          },
+        ];
+      }
+      return undefined;
+    });
+
+    const { runAgentLoop } = await import('../services/agentLoop');
+
+    const scenario: Scenario = {
+      id: 'test-scenario',
+      title: 'Test Scenario',
+      description: 'Click the submit button',
+      status: 'pending',
+    };
+
+    const hintImages: StepImage[] = [
+      {
+        id: 'hint1',
+        scenario_id: 'test-scenario',
+        image_data: 'base64ImageData1',
+        file_name: 'button.png',
+        mime_type: 'image/png',
+        order_index: 0,
+        created_at: '',
+      },
+      {
+        id: 'hint2',
+        scenario_id: 'test-scenario',
+        image_data: 'base64ImageData2',
+        file_name: 'icon.png',
+        mime_type: 'image/png',
+        order_index: 1,
+        created_at: '',
+      },
+    ];
+
+    const abortController = new AbortController();
+
+    await runAgentLoop({
+      scenario,
+      hintImages,
+      abortSignal: abortController.signal,
+    });
+
+    // Verify match_hint_images was called with correct parameters
+    expect(mockInvoke).toHaveBeenCalledWith('match_hint_images', {
+      screenshotBase64: 'mockScreenshotBase64Data',
+      templateImages: [
+        { imageData: 'base64ImageData1', fileName: 'button.png' },
+        { imageData: 'base64ImageData2', fileName: 'icon.png' },
+      ],
+      scaleFactor: 0.6,
+      confidenceThreshold: 0.7,
+    });
+
+    // Verify coordinate text is present in hint text
+    const initialMessage = capturedMessages[0];
+    const content = initialMessage.content;
+
+    if (Array.isArray(content)) {
+      const hintTextBlock = content.find(
+        (block) =>
+          block.type === 'text' &&
+          typeof block.text === 'string' &&
+          block.text.includes('画像認識による座標')
+      );
+      expect(hintTextBlock).toBeDefined();
+
+      if (hintTextBlock && 'text' in hintTextBlock) {
+        // Check coordinate format: "画像1(button.png): 885,226 / 画像2(icon.png): 223,355"
+        expect(hintTextBlock.text).toContain('画像1(button.png): 885,226');
+        expect(hintTextBlock.text).toContain('画像2(icon.png): 223,355');
+      }
+    }
+  });
+
+  it('should continue with partial results when some images are not found', async () => {
+    // Mock: first image found, second image not found (low confidence)
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'capture_screen') {
+        return {
+          imageBase64: 'mockScreenshotBase64Data',
+          scaleFactor: 0.6,
+          displayScaleFactor: 2.0,
+          resizedWidth: 1560,
+          resizedHeight: 900,
+          originalWidth: 2600,
+          originalHeight: 1500,
+          monitorId: 0,
+        };
+      }
+      if (cmd === 'is_stop_requested') {
+        return false;
+      }
+      if (cmd === 'match_hint_images') {
+        return [
+          {
+            index: 0,
+            fileName: 'found.png',
+            matchResult: {
+              found: true,
+              centerX: 500,
+              centerY: 300,
+              confidence: 0.85,
+              templateWidth: 100,
+              templateHeight: 50,
+              error: null,
+            },
+          },
+          {
+            index: 1,
+            fileName: 'notfound.png',
+            matchResult: {
+              found: false,
+              centerX: null,
+              centerY: null,
+              confidence: 0.3,
+              templateWidth: 80,
+              templateHeight: 40,
+              error: null,
+            },
+          },
+        ];
+      }
+      return undefined;
+    });
+
+    const { runAgentLoop } = await import('../services/agentLoop');
+
+    const scenario: Scenario = {
+      id: 'test-scenario',
+      title: 'Test Scenario',
+      description: 'Click the button',
+      status: 'pending',
+    };
+
+    const hintImages: StepImage[] = [
+      {
+        id: 'hint1',
+        scenario_id: 'test-scenario',
+        image_data: 'foundImageData',
+        file_name: 'found.png',
+        mime_type: 'image/png',
+        order_index: 0,
+        created_at: '',
+      },
+      {
+        id: 'hint2',
+        scenario_id: 'test-scenario',
+        image_data: 'notfoundImageData',
+        file_name: 'notfound.png',
+        mime_type: 'image/png',
+        order_index: 1,
+        created_at: '',
+      },
+    ];
+
+    const abortController = new AbortController();
+
+    await runAgentLoop({
+      scenario,
+      hintImages,
+      abortSignal: abortController.signal,
+    });
+
+    const initialMessage = capturedMessages[0];
+    const content = initialMessage.content;
+
+    if (Array.isArray(content)) {
+      const hintTextBlock = content.find(
+        (block) =>
+          block.type === 'text' &&
+          typeof block.text === 'string' &&
+          block.text.includes('画像認識による座標')
+      );
+      expect(hintTextBlock).toBeDefined();
+
+      if (hintTextBlock && 'text' in hintTextBlock) {
+        // Only found image should have coordinates
+        expect(hintTextBlock.text).toContain('画像1(found.png): 500,300');
+        // Not found image should NOT be in coordinates
+        expect(hintTextBlock.text).not.toContain('画像2');
+      }
+    }
+  });
+
+  it('should continue with partial results when some images have errors', async () => {
+    // Mock: first image succeeds, second image has decode error
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'capture_screen') {
+        return {
+          imageBase64: 'mockScreenshotBase64Data',
+          scaleFactor: 0.6,
+          displayScaleFactor: 2.0,
+          resizedWidth: 1560,
+          resizedHeight: 900,
+          originalWidth: 2600,
+          originalHeight: 1500,
+          monitorId: 0,
+        };
+      }
+      if (cmd === 'is_stop_requested') {
+        return false;
+      }
+      if (cmd === 'match_hint_images') {
+        return [
+          {
+            index: 0,
+            fileName: 'success.png',
+            matchResult: {
+              found: true,
+              centerX: 500,
+              centerY: 300,
+              confidence: 0.85,
+              templateWidth: 100,
+              templateHeight: 50,
+              error: null,
+            },
+          },
+          {
+            index: 1,
+            fileName: 'error.png',
+            matchResult: {
+              found: false,
+              centerX: null,
+              centerY: null,
+              confidence: null,
+              templateWidth: 0,
+              templateHeight: 0,
+              error: 'Base64 decode error: invalid padding',
+            },
+          },
+        ];
+      }
+      return undefined;
+    });
+
+    const { runAgentLoop } = await import('../services/agentLoop');
+
+    const scenario: Scenario = {
+      id: 'test-scenario',
+      title: 'Test Scenario',
+      description: 'Click the button',
+      status: 'pending',
+    };
+
+    const hintImages: StepImage[] = [
+      {
+        id: 'hint1',
+        scenario_id: 'test-scenario',
+        image_data: 'successImageData',
+        file_name: 'success.png',
+        mime_type: 'image/png',
+        order_index: 0,
+        created_at: '',
+      },
+      {
+        id: 'hint2',
+        scenario_id: 'test-scenario',
+        image_data: 'errorImageData',
+        file_name: 'error.png',
+        mime_type: 'image/png',
+        order_index: 1,
+        created_at: '',
+      },
+    ];
+
+    const abortController = new AbortController();
+
+    await runAgentLoop({
+      scenario,
+      hintImages,
+      abortSignal: abortController.signal,
+    });
+
+    const initialMessage = capturedMessages[0];
+    const content = initialMessage.content;
+
+    if (Array.isArray(content)) {
+      const hintTextBlock = content.find(
+        (block) =>
+          block.type === 'text' &&
+          typeof block.text === 'string' &&
+          block.text.includes('画像認識による座標')
+      );
+      expect(hintTextBlock).toBeDefined();
+
+      if (hintTextBlock && 'text' in hintTextBlock) {
+        // Only successful image should have coordinates
+        expect(hintTextBlock.text).toContain('画像1(success.png): 500,300');
+        // Error image should NOT be in coordinates
+        expect(hintTextBlock.text).not.toContain('画像2');
+      }
+    }
+  });
+
+  it('should handle case when no templates are found', async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'capture_screen') {
+        return {
+          imageBase64: 'mockScreenshotBase64Data',
+          scaleFactor: 0.6,
+          displayScaleFactor: 2.0,
+          resizedWidth: 1560,
+          resizedHeight: 900,
+          originalWidth: 2600,
+          originalHeight: 1500,
+          monitorId: 0,
+        };
+      }
+      if (cmd === 'is_stop_requested') {
+        return false;
+      }
+      if (cmd === 'match_hint_images') {
+        return [
+          {
+            index: 0,
+            fileName: 'notfound.png',
+            matchResult: {
+              found: false,
+              centerX: null,
+              centerY: null,
+              confidence: 0.3,
+              templateWidth: 100,
+              templateHeight: 50,
+              error: null,
+            },
+          },
+        ];
+      }
+      return undefined;
+    });
+
+    const { runAgentLoop } = await import('../services/agentLoop');
+
+    const scenario: Scenario = {
+      id: 'test-scenario',
+      title: 'Test Scenario',
+      description: 'Click the button',
+      status: 'pending',
+    };
+
+    const hintImages: StepImage[] = [
+      {
+        id: 'hint1',
+        scenario_id: 'test-scenario',
+        image_data: 'notfoundImageData',
+        file_name: 'notfound.png',
+        mime_type: 'image/png',
+        order_index: 0,
+        created_at: '',
+      },
+    ];
+
+    const abortController = new AbortController();
+
+    await runAgentLoop({
+      scenario,
+      hintImages,
+      abortSignal: abortController.signal,
+    });
+
+    const initialMessage = capturedMessages[0];
+    const content = initialMessage.content;
+
+    if (Array.isArray(content)) {
+      // Should have hint text but no coordinate section
+      const hintTextBlock = content.find(
+        (block) =>
+          block.type === 'text' &&
+          typeof block.text === 'string' &&
+          block.text.includes('ヒント画像')
+      );
+      expect(hintTextBlock).toBeDefined();
+
+      // Should NOT have coordinate section when nothing found
+      const coordinateBlock = content.find(
+        (block) =>
+          block.type === 'text' &&
+          typeof block.text === 'string' &&
+          block.text.includes('画像認識による座標')
+      );
+      expect(coordinateBlock).toBeUndefined();
+    }
+  });
+
+  it('should continue without coordinates when template matching throws error', async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'capture_screen') {
+        return {
+          imageBase64: 'mockScreenshotBase64Data',
+          scaleFactor: 0.6,
+          displayScaleFactor: 2.0,
+          resizedWidth: 1560,
+          resizedHeight: 900,
+          originalWidth: 2600,
+          originalHeight: 1500,
+          monitorId: 0,
+        };
+      }
+      if (cmd === 'is_stop_requested') {
+        return false;
+      }
+      if (cmd === 'match_hint_images') {
+        throw new Error('Unexpected Rust error');
+      }
+      return undefined;
+    });
+
+    const { runAgentLoop } = await import('../services/agentLoop');
+
+    const scenario: Scenario = {
+      id: 'test-scenario',
+      title: 'Test Scenario',
+      description: 'Click the button',
+      status: 'pending',
+    };
+
+    const hintImages: StepImage[] = [
+      {
+        id: 'hint1',
+        scenario_id: 'test-scenario',
+        image_data: 'imageData',
+        file_name: 'button.png',
+        mime_type: 'image/png',
+        order_index: 0,
+        created_at: '',
+      },
+    ];
+
+    const abortController = new AbortController();
+
+    // Should not throw - should continue without coordinates
+    await expect(
+      runAgentLoop({
+        scenario,
+        hintImages,
+        abortSignal: abortController.signal,
+      })
+    ).resolves.toBeDefined();
+
+    const initialMessage = capturedMessages[0];
+    const content = initialMessage.content;
+
+    if (Array.isArray(content)) {
+      // Should still have hint images in the message
+      const hintTextBlock = content.find(
+        (block) =>
+          block.type === 'text' &&
+          typeof block.text === 'string' &&
+          block.text.includes('ヒント画像')
+      );
+      expect(hintTextBlock).toBeDefined();
+
+      // Should NOT have coordinate section (error was caught)
+      const coordinateBlock = content.find(
+        (block) =>
+          block.type === 'text' &&
+          typeof block.text === 'string' &&
+          block.text.includes('画像認識による座標')
+      );
+      expect(coordinateBlock).toBeUndefined();
     }
   });
 });
