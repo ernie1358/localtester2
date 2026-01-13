@@ -508,4 +508,276 @@ describe('runAgentLoop - Screen Change Re-matching', () => {
     const matchCalls = mockInvoke.mock.calls.filter((call) => call[0] === 'match_hint_images');
     expect(matchCalls.length).toBe(2);
   });
+
+  it('should send coordinates invalidation message when screen changes and all images become undetected', async () => {
+    // This test verifies that when screen changes and ALL previously found images
+    // become undetected, a message is sent to invalidate previous coordinates
+    let matchCallCount = 0;
+    let captureCount = 0;
+
+    // Setup Claude API mock
+    let apiCallCount = 0;
+    mockCreate.mockImplementation(() => {
+      apiCallCount++;
+      if (apiCallCount < 3) {
+        return Promise.resolve({
+          content: [
+            {
+              type: 'tool_use',
+              id: `tool_${apiCallCount}`,
+              name: 'computer',
+              input: { action: 'left_click', coordinate: [100, 100] },
+            },
+          ],
+          stop_reason: 'tool_use',
+        });
+      }
+      return Promise.resolve({
+        content: [{ type: 'text', text: '{"result": "success"}' }],
+        stop_reason: 'end_turn',
+      });
+    });
+
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'capture_screen') {
+        captureCount++;
+        return {
+          imageBase64: captureCount === 1 ? 'screenshot1' : 'differentScreen',
+          scaleFactor: 0.6,
+          displayScaleFactor: 2.0,
+          resizedWidth: 1560,
+          resizedHeight: 900,
+          originalWidth: 2600,
+          originalHeight: 1500,
+          monitorId: 0,
+        };
+      }
+      if (cmd === 'is_stop_requested') {
+        return false;
+      }
+      if (cmd === 'match_hint_images') {
+        matchCallCount++;
+        if (matchCallCount === 1) {
+          // Initial: image found
+          return [
+            {
+              index: 0,
+              fileName: 'button.png',
+              matchResult: {
+                found: true,
+                centerX: 200,
+                centerY: 150,
+                confidence: 0.9,
+                templateWidth: 100,
+                templateHeight: 50,
+                error: null,
+              },
+            },
+          ];
+        } else {
+          // After screen change: image NOT found (screen completely changed)
+          return [
+            {
+              index: 0,
+              fileName: 'button.png',
+              matchResult: {
+                found: false,
+                centerX: null,
+                centerY: null,
+                confidence: 0.3,
+                templateWidth: 100,
+                templateHeight: 50,
+                error: null,
+              },
+            },
+          ];
+        }
+      }
+      if (cmd === 'left_click') {
+        return undefined;
+      }
+      return undefined;
+    });
+
+    const { runAgentLoop } = await import('../services/agentLoop');
+
+    const scenario: Scenario = {
+      id: 'test-scenario',
+      title: 'Test Scenario',
+      description: 'Test coordinates invalidation on screen change',
+      status: 'pending',
+    };
+
+    const hintImages: StepImage[] = [
+      {
+        id: 'hint1',
+        scenario_id: 'test-scenario',
+        image_data: 'buttonData',
+        file_name: 'button.png',
+        mime_type: 'image/png',
+        order_index: 0,
+        created_at: '',
+      },
+    ];
+
+    const abortController = new AbortController();
+
+    await runAgentLoop({
+      scenario,
+      hintImages,
+      abortSignal: abortController.signal,
+    });
+
+    // Verify re-matching was attempted
+    const matchCalls = mockInvoke.mock.calls.filter((call) => call[0] === 'match_hint_images');
+    expect(matchCalls.length).toBe(2);
+
+    // Verify the API was called with invalidation message
+    // Look for the tool_result that contains the invalidation message
+    // The tool_result structure is:
+    // { type: 'tool_result', tool_use_id: ..., content: [{ type: 'text', text: '...' }, ...] }
+    const apiCalls = mockCreate.mock.calls;
+    const hasInvalidationMessage = apiCalls.some((call) => {
+      const messages = call[0]?.messages;
+      if (!Array.isArray(messages)) return false;
+      return messages.some(
+        (msg: {
+          role?: string;
+          content?:
+            | Array<{
+                type?: string;
+                text?: string;
+                content?: Array<{ type?: string; text?: string }>;
+              }>
+            | string;
+        }) => {
+          // tool_result is sent in user messages
+          if (msg.role !== 'user') return false;
+          if (!msg.content || !Array.isArray(msg.content)) return false;
+          return msg.content.some((block) => {
+            if (block.type !== 'tool_result') return false;
+            // Check nested content array for text
+            if (block.content && Array.isArray(block.content)) {
+              return block.content.some(
+                (innerBlock: { type?: string; text?: string }) =>
+                  innerBlock.type === 'text' &&
+                  innerBlock.text &&
+                  innerBlock.text.includes('座標情報') &&
+                  innerBlock.text.includes('検出できませんでした')
+              );
+            }
+            return false;
+          });
+        }
+      );
+    });
+    expect(hasInvalidationMessage).toBe(true);
+  });
+
+  it('should treat non-finite confidence errors as permanent and not retry', async () => {
+    // This test verifies that images with "non-finite confidence" errors
+    // (e.g., single-color templates) are NOT retried even when screen changes
+    let matchCallCount = 0;
+    let captureCount = 0;
+
+    // Setup Claude API mock
+    let apiCallCount = 0;
+    mockCreate.mockImplementation(() => {
+      apiCallCount++;
+      if (apiCallCount < 3) {
+        return Promise.resolve({
+          content: [
+            {
+              type: 'tool_use',
+              id: `tool_${apiCallCount}`,
+              name: 'computer',
+              input: { action: 'left_click', coordinate: [100, 100] },
+            },
+          ],
+          stop_reason: 'tool_use',
+        });
+      }
+      return Promise.resolve({
+        content: [{ type: 'text', text: '{"result": "success"}' }],
+        stop_reason: 'end_turn',
+      });
+    });
+
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'capture_screen') {
+        captureCount++;
+        return {
+          imageBase64: captureCount === 1 ? 'screenshot1' : 'screenshot2',
+          scaleFactor: 0.6,
+          displayScaleFactor: 2.0,
+          resizedWidth: 1560,
+          resizedHeight: 900,
+          originalWidth: 2600,
+          originalHeight: 1500,
+          monitorId: 0,
+        };
+      }
+      if (cmd === 'is_stop_requested') {
+        return false;
+      }
+      if (cmd === 'match_hint_images') {
+        matchCallCount++;
+        // Always return the same error - single color image
+        return [
+          {
+            index: 0,
+            fileName: 'single-color.png',
+            matchResult: {
+              found: false,
+              centerX: null,
+              centerY: null,
+              confidence: null,
+              templateWidth: 100,
+              templateHeight: 100,
+              error:
+                'Template matching produced non-finite confidence value. Template may have insufficient variance (e.g., single-color image).',
+            },
+          },
+        ];
+      }
+      if (cmd === 'left_click') {
+        return undefined;
+      }
+      return undefined;
+    });
+
+    const { runAgentLoop } = await import('../services/agentLoop');
+
+    const scenario: Scenario = {
+      id: 'test-scenario',
+      title: 'Test Scenario',
+      description: 'Test non-finite confidence permanent error',
+      status: 'pending',
+    };
+
+    const hintImages: StepImage[] = [
+      {
+        id: 'hint1',
+        scenario_id: 'test-scenario',
+        image_data: 'singleColorData',
+        file_name: 'single-color.png',
+        mime_type: 'image/png',
+        order_index: 0,
+        created_at: '',
+      },
+    ];
+
+    const abortController = new AbortController();
+
+    await runAgentLoop({
+      scenario,
+      hintImages,
+      abortSignal: abortController.signal,
+    });
+
+    // Should only be called ONCE because the error is permanent
+    // (non-finite confidence = template has no variance = won't improve with different screenshot)
+    const matchCalls = mockInvoke.mock.calls.filter((call) => call[0] === 'match_hint_images');
+    expect(matchCalls.length).toBe(1);
+  });
 });

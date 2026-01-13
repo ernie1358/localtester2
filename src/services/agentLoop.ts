@@ -774,6 +774,11 @@ export async function runAgentLoop(
             if (error.includes('insufficient opacity')) {
               return true;
             }
+            // Non-finite confidence: template has insufficient variance (e.g., single-color image)
+            // This is permanent because the template itself lacks distinctive features
+            if (error.includes('non-finite confidence')) {
+              return true;
+            }
             return false;
           };
 
@@ -858,6 +863,17 @@ export async function runAgentLoop(
 
                 if (allFoundCoordinates) {
                   updatedCoordinatesText = `\n\n【更新された座標情報】\n${allFoundCoordinates}`;
+                }
+              } else if (screenChanged) {
+                // Screen changed but no images were detected
+                // Inform LLM that previous coordinates are no longer valid
+                const totalFoundCount = Array.from(hintImageMatchResults.values()).filter(
+                  (r) => r.matchResult.found && !r.matchResult.error
+                ).length;
+
+                if (totalFoundCount === 0) {
+                  log(`[Agent Loop] Screen changed but no hint images detected - invalidating previous coordinates`);
+                  updatedCoordinatesText = `\n\n【座標情報】\n画面が変更されましたが、ヒント画像を検出できませんでした。以前の座標は無効です。`;
                 }
               }
             } catch (error) {
