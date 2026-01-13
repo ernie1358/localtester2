@@ -746,34 +746,56 @@ export async function runAgentLoop(
           };
         }
 
-        // Re-match undetected hint images against new screenshot
-        // This catches elements that appear after screen transitions
+        // Re-match hint images against new screenshot
+        // When screen changes, re-match ALL images (including previously found ones)
+        // to update coordinates that may have shifted after screen transitions.
+        // When screen hasn't changed, only re-match undetected images.
         let updatedCoordinatesText = '';
         // NOTE: Removed hintImageMatchResults.size > 0 guard to allow re-matching
         // even when initial matching failed (empty result or exception)
         if (options.hintImages && options.hintImages.length > 0) {
-          // Find images that were not detected previously (found=false and no permanent error)
+          // Helper: Check if error is permanent (won't resolve with different screenshots)
+          const isPermanentError = (error: string | null | undefined): boolean => {
+            if (!error) return false;
+            // decode errors: base64 decode failures (image data is corrupted)
+            // opacity errors: template has insufficient opacity (transparent images)
+            // larger than screenshot: template dimensions exceed screenshot (after scaling)
+            return (
+              error.includes('decode') ||
+              error.includes('insufficient opacity') ||
+              error.includes('larger than screenshot')
+            );
+          };
+
+          // Find images to re-match based on screen change status
           // Preserve original index to avoid findIndex issues with duplicate file_name
-          const undetectedImagesWithIndex: { img: StepImage; originalIndex: number }[] = [];
+          const imagesToRematchWithIndex: { img: StepImage; originalIndex: number }[] = [];
           options.hintImages.forEach((img, idx) => {
             const prevResult = hintImageMatchResults.get(idx);
-            // Re-try if: not found previously, or had a transient error (not decode error)
-            // Skip permanent errors like base64 decode failures
+
+            // Skip images with permanent errors (won't resolve regardless of screenshot)
+            if (prevResult?.matchResult.error && isPermanentError(prevResult.matchResult.error)) {
+              return;
+            }
+
             if (!prevResult) {
               // No previous result, try matching
-              undetectedImagesWithIndex.push({ img, originalIndex: idx });
-            } else if (!prevResult.matchResult.found && !prevResult.matchResult.error?.includes('decode')) {
-              // Not found and not a permanent error, re-try
-              undetectedImagesWithIndex.push({ img, originalIndex: idx });
+              imagesToRematchWithIndex.push({ img, originalIndex: idx });
+            } else if (screenChanged) {
+              // Screen changed: re-match ALL images (including found ones) to update coordinates
+              imagesToRematchWithIndex.push({ img, originalIndex: idx });
+            } else if (!prevResult.matchResult.found) {
+              // Screen unchanged, not found previously: re-try matching
+              imagesToRematchWithIndex.push({ img, originalIndex: idx });
             }
-            // Skip: already found OR has permanent decode error
+            // Skip: screen unchanged AND already found (coordinates still valid)
           });
 
-          if (undetectedImagesWithIndex.length > 0) {
+          if (imagesToRematchWithIndex.length > 0) {
             try {
               const reMatchResults = await invoke<HintImageMatchResult[]>('match_hint_images', {
                 screenshotBase64: captureResult.imageBase64,
-                templateImages: undetectedImagesWithIndex.map(({ img }) => ({
+                templateImages: imagesToRematchWithIndex.map(({ img }) => ({
                   imageData: img.image_data,
                   fileName: img.file_name,
                 })),
@@ -783,21 +805,21 @@ export async function runAgentLoop(
 
               // Update stored results with new matches
               // IMPORTANT: Use preserved originalIndex instead of findIndex to handle duplicate file_name
-              let newlyFoundCount = 0;
+              let updatedCount = 0;
               for (let i = 0; i < reMatchResults.length; i++) {
                 const result = reMatchResults[i];
                 // Map result back to original index using the preserved mapping
-                const originalIndex = undetectedImagesWithIndex[i].originalIndex;
+                const originalIndex = imagesToRematchWithIndex[i].originalIndex;
                 // Update with correct original index
                 const updatedResult = { ...result, index: originalIndex };
                 hintImageMatchResults.set(originalIndex, updatedResult);
                 if (result.matchResult.found) {
-                  newlyFoundCount++;
+                  updatedCount++;
                 }
               }
 
-              if (newlyFoundCount > 0) {
-                log(`[Agent Loop] Re-matching found ${newlyFoundCount} new hint image(s)`);
+              if (updatedCount > 0) {
+                log(`[Agent Loop] Re-matching updated ${updatedCount} hint image(s)${screenChanged ? ' (screen changed)' : ''}`);
 
                 // Build updated coordinates text from all found images
                 const allFoundCoordinates = Array.from(hintImageMatchResults.values())
