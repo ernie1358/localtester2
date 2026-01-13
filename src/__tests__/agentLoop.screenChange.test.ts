@@ -432,6 +432,9 @@ describe('runAgentLoop - Screen Change Re-matching', () => {
         matchCallCount++;
         if (matchCallCount === 1) {
           // Initial: screenshot decode error (transient)
+          // Format matches Rust's actual error: "Screenshot decode error: Image processing error: Base64 decode error: ..."
+          // This tests that screenshot decode errors containing "Base64 decode error" substring
+          // are correctly identified as transient (not permanent) errors
           return [
             {
               index: 0,
@@ -443,7 +446,7 @@ describe('runAgentLoop - Screen Change Re-matching', () => {
                 confidence: null,
                 templateWidth: 0,
                 templateHeight: 0,
-                error: 'Screenshot decode error: temporary failure',
+                error: 'Screenshot decode error: Image processing error: Base64 decode error: invalid base64',
               },
             },
           ];

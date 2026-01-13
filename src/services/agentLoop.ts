@@ -758,9 +758,14 @@ export async function runAgentLoop(
           // Note: "Screenshot decode error" is NOT permanent as it may succeed with a different screenshot
           const isPermanentError = (error: string | null | undefined): boolean => {
             if (!error) return false;
+            // IMPORTANT: Screenshot decode errors are transient - they may succeed with a different screenshot
+            // This check MUST come before Base64/Image decode error checks because screenshot errors
+            // may contain these substrings (e.g., "Screenshot decode error: Image processing error: Base64 decode error: ...")
+            if (error.includes('Screenshot decode error')) {
+              return false;
+            }
             // Template-side decode errors: base64/image decode failures (template data is corrupted)
             // These are permanent because the template itself is invalid
-            // Note: "Screenshot decode error" is excluded - it may succeed with next screenshot
             if (error.includes('Base64 decode error') || error.includes('Image decode error')) {
               return true;
             }
