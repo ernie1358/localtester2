@@ -17,6 +17,8 @@ import type { AuthResult } from '../types/auth';
  */
 export async function signInWithGoogle(): Promise<AuthResult> {
   let port: number | null = null;
+  // TypeScript制御フロー解析の問題を回避するためオブジェクトで保持
+  const cleanup: { unlisten: (() => void) | null } = { unlisten: null };
 
   try {
     const client = await getSupabaseClient();
@@ -38,70 +40,87 @@ export async function signInWithGoogle(): Promise<AuthResult> {
       throw new Error(error?.message || 'Failed to get OAuth URL');
     }
 
-    // unlistenを格納する配列（TypeScriptの制御フロー解析の問題を回避）
-    const unlistenHolder: Array<() => void> = [];
+    // タイムアウト用のハンドル
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
-    // リダイレクトURLを待機するPromise
-    const authPromise = new Promise<AuthResult>((resolve) => {
-      const timeout = setTimeout(() => {
-        resolve({ success: false, error: '認証がタイムアウトしました。再度お試しください。' });
+    // コールバックURLを受け取るためのPromise
+    const callbackPromise = new Promise<string>((resolve) => {
+      timeoutId = setTimeout(() => {
+        resolve('__timeout__');
       }, 300000); // 5分タイムアウト
-
-      // onUrl()でリダイレクトURLを受信
-      onUrl(async (callbackUrl) => {
-        clearTimeout(timeout);
-
-        try {
-          const url = new URL(callbackUrl);
-
-          // PKCEフローでは認証コード(code)がクエリパラメータとして返される
-          const code = url.searchParams.get('code');
-
-          if (code) {
-            // PKCE flow - codeをセッションに交換
-            const { error: exchangeError } = await client.auth.exchangeCodeForSession(code);
-            if (exchangeError) {
-              resolve({ success: false, error: exchangeError.message });
-            } else {
-              resolve({ success: true });
-            }
-          } else {
-            // エラーチェック（認証がキャンセルされた場合など）
-            const errorParam = url.searchParams.get('error');
-            const errorDescription = url.searchParams.get('error_description');
-
-            if (errorParam) {
-              resolve({ success: false, error: errorDescription || errorParam });
-            } else {
-              resolve({ success: false, error: '認証コードを取得できませんでした' });
-            }
-          }
-        } catch (err) {
-          resolve({
-            success: false,
-            error: err instanceof Error ? err.message : '不明なエラーが発生しました'
-          });
-        }
-      }).then((fn) => { unlistenHolder.push(fn); });
     });
 
-    // 外部ブラウザで認証ページを開く
+    // onUrl()リスナーを登録（awaitで登録完了を待機してからブラウザを開く）
+    let urlReceived: ((url: string) => void) | null = null;
+    const urlPromise = new Promise<string>((resolve) => {
+      urlReceived = resolve;
+    });
+
+    cleanup.unlisten = await onUrl((callbackUrl) => {
+      if (urlReceived) {
+        urlReceived(callbackUrl);
+      }
+    });
+
+    // 外部ブラウザで認証ページを開く（リスナー登録完了後）
     await openUrl(data.url);
 
-    const result = await authPromise;
+    // URLを受信するか、タイムアウトするまで待機
+    const result = await Promise.race([urlPromise, callbackPromise]);
 
-    // クリーンアップ
-    if (unlistenHolder.length > 0) {
-      unlistenHolder[0]();
+    // タイムアウトをクリア
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
     }
 
-    return result;
+    if (result === '__timeout__') {
+      return { success: false, error: '認証がタイムアウトしました。再度お試しください。' };
+    }
+
+    // コールバックURLを処理
+    try {
+      const url = new URL(result);
+
+      // PKCEフローでは認証コード(code)がクエリパラメータとして返される
+      const code = url.searchParams.get('code');
+
+      if (code) {
+        // PKCE flow - codeをセッションに交換
+        const { error: exchangeError } = await client.auth.exchangeCodeForSession(code);
+        if (exchangeError) {
+          return { success: false, error: exchangeError.message };
+        }
+        return { success: true };
+      } else {
+        // エラーチェック（認証がキャンセルされた場合など）
+        const errorParam = url.searchParams.get('error');
+        const errorDescription = url.searchParams.get('error_description');
+
+        if (errorParam) {
+          return { success: false, error: errorDescription || errorParam };
+        }
+        return { success: false, error: '認証コードを取得できませんでした' };
+      }
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : '不明なエラーが発生しました'
+      };
+    }
   } catch (error) {
     return {
       success: false,
       error: error instanceof Error ? error.message : '不明なエラーが発生しました',
     };
   } finally {
+    // unlistenを必ずクリーンアップ
+    if (cleanup.unlisten !== null) {
+      try {
+        cleanup.unlisten();
+      } catch {
+        // クリーンアップエラーは無視
+      }
+    }
     if (port !== null) {
       try {
         await cancel(port);
