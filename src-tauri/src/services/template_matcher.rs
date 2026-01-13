@@ -154,6 +154,11 @@ fn find_template_with_decoded_screenshot(
     }
 }
 
+/// Minimum opacity ratio threshold for template matching
+/// Templates with opacity ratio below this are considered too transparent
+/// and will return found=false to avoid false positives
+const MIN_OPACITY_RATIO: f32 = 0.1; // At least 10% of pixels must be opaque
+
 /// Internal implementation that returns Result for error handling
 /// Uses pre-decoded grayscale screenshot for efficiency
 fn find_template_internal(
@@ -181,6 +186,27 @@ fn find_template_internal(
     } else {
         template_original
     };
+
+    // Check opacity ratio before processing
+    // Templates that are mostly transparent will become nearly uniform after
+    // alpha compositing, leading to unreliable NCC results
+    let opacity_ratio = calculate_opacity_ratio(&template);
+    if opacity_ratio < MIN_OPACITY_RATIO {
+        let (w, h) = template.dimensions();
+        return Ok(MatchResult {
+            found: false,
+            center_x: None,
+            center_y: None,
+            confidence: None,
+            template_width: w,
+            template_height: h,
+            error: Some(format!(
+                "Template has insufficient opacity ({:.1}% < {:.1}% minimum). Mostly transparent images cannot be reliably matched.",
+                opacity_ratio * 100.0,
+                MIN_OPACITY_RATIO * 100.0
+            )),
+        });
+    }
 
     // Convert to grayscale with alpha compositing for transparent PNGs
     // Transparent pixels are composited onto white background to avoid
@@ -247,6 +273,30 @@ fn find_template_internal(
             error: None,
         })
     }
+}
+
+/// Calculate the opacity ratio of an image (proportion of non-transparent pixels)
+///
+/// Returns a value between 0.0 (fully transparent) and 1.0 (fully opaque).
+/// A pixel is considered opaque if its alpha value is > 0.
+///
+/// This is used to detect templates that are mostly transparent, which would
+/// become nearly uniform after alpha compositing onto white background,
+/// leading to unreliable NCC matching results.
+fn calculate_opacity_ratio(image: &DynamicImage) -> f32 {
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let total_pixels = (width * height) as f32;
+
+    if total_pixels == 0.0 {
+        return 0.0;
+    }
+
+    let opaque_pixels = rgba.pixels()
+        .filter(|pixel| pixel[3] > 0)
+        .count() as f32;
+
+    opaque_pixels / total_pixels
 }
 
 /// Convert DynamicImage to grayscale with proper alpha handling
@@ -644,5 +694,132 @@ mod tests {
             "Confidence {} should be in reasonable range [0, 1.1]",
             confidence
         );
+    }
+
+    #[test]
+    fn test_opacity_ratio_calculation() {
+        // Test calculate_opacity_ratio function
+        let mut img: RgbaImage = ImageBuffer::new(10, 10);
+
+        // Fill all pixels as transparent (alpha = 0)
+        for pixel in img.pixels_mut() {
+            *pixel = Rgba([0, 0, 0, 0]);
+        }
+
+        let dynamic_img = DynamicImage::ImageRgba8(img.clone());
+        let ratio = calculate_opacity_ratio(&dynamic_img);
+        assert_eq!(ratio, 0.0, "Fully transparent image should have 0% opacity");
+
+        // Fill all pixels as opaque (alpha = 255)
+        for pixel in img.pixels_mut() {
+            *pixel = Rgba([128, 128, 128, 255]);
+        }
+
+        let dynamic_img = DynamicImage::ImageRgba8(img.clone());
+        let ratio = calculate_opacity_ratio(&dynamic_img);
+        assert_eq!(ratio, 1.0, "Fully opaque image should have 100% opacity");
+
+        // 50% opaque (half the pixels have alpha > 0)
+        for (i, pixel) in img.pixels_mut().enumerate() {
+            if i % 2 == 0 {
+                *pixel = Rgba([128, 128, 128, 255]); // opaque
+            } else {
+                *pixel = Rgba([0, 0, 0, 0]); // transparent
+            }
+        }
+
+        let dynamic_img = DynamicImage::ImageRgba8(img);
+        let ratio = calculate_opacity_ratio(&dynamic_img);
+        assert!((ratio - 0.5).abs() < 0.01, "Half opaque image should have ~50% opacity, got {}", ratio);
+    }
+
+    #[test]
+    fn test_low_opacity_template_rejected() {
+        // Create a mostly transparent template (below MIN_OPACITY_RATIO threshold)
+        let mut img: RgbaImage = ImageBuffer::new(50, 50);
+
+        // Only 5% opaque pixels (below 10% threshold)
+        let total_pixels = 50 * 50;
+        let opaque_count = (total_pixels as f32 * 0.05) as usize; // 5%
+
+        for (i, pixel) in img.pixels_mut().enumerate() {
+            if i < opaque_count {
+                *pixel = Rgba([255, 255, 255, 255]); // opaque
+            } else {
+                *pixel = Rgba([0, 0, 0, 0]); // transparent
+            }
+        }
+
+        // Encode as PNG
+        let mut buffer = Vec::new();
+        let encoder = image::codecs::png::PngEncoder::new(&mut buffer);
+        encoder
+            .write_image(
+                img.as_raw(),
+                50,
+                50,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+        let template_base64 = BASE64_STANDARD.encode(&buffer);
+
+        // Create a simple screenshot
+        let screenshot = create_test_image(200, 200, [128, 128, 128]);
+
+        // Template should be rejected due to low opacity
+        let result = find_template_in_screenshot(&screenshot, &template_base64, 1.0, 0.5);
+
+        assert!(!result.found, "Low opacity template should not match");
+        assert!(result.error.is_some(), "Should have error message");
+        assert!(
+            result.error.as_ref().unwrap().contains("insufficient opacity"),
+            "Error should mention opacity issue: {}",
+            result.error.unwrap()
+        );
+    }
+
+    #[test]
+    fn test_sufficient_opacity_template_processed() {
+        // Create a template with sufficient opacity (above MIN_OPACITY_RATIO threshold)
+        let mut img: RgbaImage = ImageBuffer::new(50, 50);
+
+        // 50% opaque pixels (well above 10% threshold)
+        for (i, pixel) in img.pixels_mut().enumerate() {
+            if i % 2 == 0 {
+                *pixel = Rgba([255, 255, 255, 255]); // opaque white
+            } else {
+                *pixel = Rgba([0, 0, 0, 0]); // transparent
+            }
+        }
+
+        // Encode as PNG
+        let mut buffer = Vec::new();
+        let encoder = image::codecs::png::PngEncoder::new(&mut buffer);
+        encoder
+            .write_image(
+                img.as_raw(),
+                50,
+                50,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+        let template_base64 = BASE64_STANDARD.encode(&buffer);
+
+        // Create a screenshot
+        let screenshot = create_test_image(200, 200, [128, 128, 128]);
+
+        // Template should be processed (not rejected due to opacity)
+        let result = find_template_in_screenshot(&screenshot, &template_base64, 1.0, 0.5);
+
+        // Should not have opacity error
+        if result.error.is_some() {
+            assert!(
+                !result.error.as_ref().unwrap().contains("insufficient opacity"),
+                "Sufficient opacity template should not be rejected: {}",
+                result.error.unwrap()
+            );
+        }
+        // Should have confidence value (template was processed)
+        assert!(result.confidence.is_some(), "Template should be processed and have confidence value");
     }
 }

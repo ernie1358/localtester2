@@ -57,17 +57,11 @@ pub fn match_hint_images(
 ) -> Vec<HintImageMatchResult> {
     let threshold = confidence_threshold.unwrap_or(0.7);
 
-    // Collect templates with indices for batch processing
-    let templates_with_indices: Vec<(usize, &str, &str)> = template_images
-        .iter()
-        .enumerate()
-        .map(|(index, t)| (index, t.image_data.as_str(), t.file_name.as_str()))
-        .collect();
-
     // Create tuples for batch processing (image_data, file_name)
-    let templates: Vec<(&str, &str)> = templates_with_indices
+    // Note: Output index corresponds to input array order (0, 1, 2, ...)
+    let templates: Vec<(&str, &str)> = template_images
         .iter()
-        .map(|(_, data, name)| (*data, *name))
+        .map(|t| (t.image_data.as_str(), t.file_name.as_str()))
         .collect();
 
     // Process all templates with single screenshot decode
@@ -78,7 +72,7 @@ pub fn match_hint_images(
         threshold,
     );
 
-    // Rebuild results with original indices
+    // Rebuild results with array index (matches input order)
     batch_results
         .into_iter()
         .enumerate()
