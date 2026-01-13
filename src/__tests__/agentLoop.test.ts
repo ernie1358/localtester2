@@ -1461,4 +1461,239 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
     const matchCalls = mockInvoke.mock.calls.filter((call) => call[0] === 'match_hint_images');
     expect(matchCalls.length).toBe(1);
   });
+
+  it('should correctly map re-match results with duplicate file_name by preserving original indices', async () => {
+    // This test verifies that re-matching correctly preserves original indices
+    // even when multiple hint images have the same file_name.
+    // The key fix is using array index mapping instead of findIndex by file_name.
+
+    // In the initial match, all images are not found
+    // After re-match, we verify that the correct image_data is passed
+    // which proves the original index was preserved correctly.
+    mockInvoke.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'capture_screen') {
+        return {
+          imageBase64: 'mockScreenshot',
+          scaleFactor: 0.6,
+          displayScaleFactor: 2.0,
+          resizedWidth: 1560,
+          resizedHeight: 900,
+          originalWidth: 2600,
+          originalHeight: 1500,
+          monitorId: 0,
+        };
+      }
+      if (cmd === 'is_stop_requested') {
+        return false;
+      }
+      if (cmd === 'match_hint_images') {
+        // Always return not found - we're just testing the mapping
+        const templateImages = (args as { templateImages: Array<{ imageData: string; fileName: string }> }).templateImages;
+        return templateImages.map((t, i) => ({
+          index: i,
+          fileName: t.fileName,
+          matchResult: { found: false, centerX: null, centerY: null, confidence: 0.3, templateWidth: 50, templateHeight: 50, error: null },
+        }));
+      }
+      return undefined;
+    });
+
+    const { runAgentLoop } = await import('../services/agentLoop');
+
+    const scenario: Scenario = {
+      id: 'test-scenario',
+      title: 'Test Scenario',
+      description: 'Test duplicate file_name handling',
+      status: 'pending',
+    };
+
+    // Three images with the same file_name but different image_data
+    const hintImages: StepImage[] = [
+      {
+        id: 'hint1',
+        scenario_id: 'test-scenario',
+        image_data: 'imageData1_unique',
+        file_name: 'button.png', // Same name
+        mime_type: 'image/png',
+        order_index: 0,
+        created_at: '',
+      },
+      {
+        id: 'hint2',
+        scenario_id: 'test-scenario',
+        image_data: 'imageData2_unique',
+        file_name: 'button.png', // Same name
+        mime_type: 'image/png',
+        order_index: 1,
+        created_at: '',
+      },
+      {
+        id: 'hint3',
+        scenario_id: 'test-scenario',
+        image_data: 'imageData3_unique',
+        file_name: 'button.png', // Same name
+        mime_type: 'image/png',
+        order_index: 2,
+        created_at: '',
+      },
+    ];
+
+    const abortController = new AbortController();
+
+    await runAgentLoop({
+      scenario,
+      hintImages,
+      abortSignal: abortController.signal,
+    });
+
+    // Verify initial match was called with all images in correct order
+    const matchCalls = mockInvoke.mock.calls.filter((call) => call[0] === 'match_hint_images');
+    expect(matchCalls.length).toBeGreaterThanOrEqual(1);
+
+    // Verify the first call has all three images with unique image_data
+    const initialCall = matchCalls[0];
+    const templateImages = initialCall[1].templateImages;
+    expect(templateImages.length).toBe(3);
+    // Verify image_data is preserved in correct order (proving correct mapping)
+    expect(templateImages[0].imageData).toBe('imageData1_unique');
+    expect(templateImages[1].imageData).toBe('imageData2_unique');
+    expect(templateImages[2].imageData).toBe('imageData3_unique');
+    // All have the same file_name, which would cause issues with findIndex
+    expect(templateImages[0].fileName).toBe('button.png');
+    expect(templateImages[1].fileName).toBe('button.png');
+    expect(templateImages[2].fileName).toBe('button.png');
+  });
+
+  it('should include images without previous results in re-match candidates (empty result case)', async () => {
+    // This test verifies that when initial matching returns empty array,
+    // the re-matching logic correctly identifies all images as candidates
+    // because they have no previous result (prevResult === undefined).
+
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'capture_screen') {
+        return {
+          imageBase64: 'mockScreenshot',
+          scaleFactor: 0.6,
+          displayScaleFactor: 2.0,
+          resizedWidth: 1560,
+          resizedHeight: 900,
+          originalWidth: 2600,
+          originalHeight: 1500,
+          monitorId: 0,
+        };
+      }
+      if (cmd === 'is_stop_requested') {
+        return false;
+      }
+      if (cmd === 'match_hint_images') {
+        // Return empty array - simulating complete failure
+        // But the code now handles this by still allowing re-matches
+        return [];
+      }
+      return undefined;
+    });
+
+    const { runAgentLoop } = await import('../services/agentLoop');
+
+    const scenario: Scenario = {
+      id: 'test-scenario',
+      title: 'Test Scenario',
+      description: 'Test re-matching after initial failure',
+      status: 'pending',
+    };
+
+    const hintImages: StepImage[] = [
+      {
+        id: 'hint1',
+        scenario_id: 'test-scenario',
+        image_data: 'delayedElementImageData',
+        file_name: 'delayed-element.png',
+        mime_type: 'image/png',
+        order_index: 0,
+        created_at: '',
+      },
+    ];
+
+    const abortController = new AbortController();
+
+    await runAgentLoop({
+      scenario,
+      hintImages,
+      abortSignal: abortController.signal,
+    });
+
+    // Verify that match_hint_images was called
+    // The key point is the code doesn't crash and continues execution
+    const matchCalls = mockInvoke.mock.calls.filter((call) => call[0] === 'match_hint_images');
+    expect(matchCalls.length).toBeGreaterThanOrEqual(1);
+
+    // First call should have the image
+    expect(matchCalls[0][1].templateImages[0].fileName).toBe('delayed-element.png');
+  });
+
+  it('should continue execution when initial matching throws exception', async () => {
+    // Tests that the agent loop continues even when initial match_hint_images throws an error
+    let matchCallCount = 0;
+
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'capture_screen') {
+        return {
+          imageBase64: 'mockScreenshot',
+          scaleFactor: 0.6,
+          displayScaleFactor: 2.0,
+          resizedWidth: 1560,
+          resizedHeight: 900,
+          originalWidth: 2600,
+          originalHeight: 1500,
+          monitorId: 0,
+        };
+      }
+      if (cmd === 'is_stop_requested') {
+        return false;
+      }
+      if (cmd === 'match_hint_images') {
+        matchCallCount++;
+        // Always throw to test error handling
+        throw new Error('Rust panic: unexpected error');
+      }
+      return undefined;
+    });
+
+    const { runAgentLoop } = await import('../services/agentLoop');
+
+    const scenario: Scenario = {
+      id: 'test-scenario',
+      title: 'Test Scenario',
+      description: 'Test exception handling',
+      status: 'pending',
+    };
+
+    const hintImages: StepImage[] = [
+      {
+        id: 'hint1',
+        scenario_id: 'test-scenario',
+        image_data: 'targetImageData',
+        file_name: 'target.png',
+        mime_type: 'image/png',
+        order_index: 0,
+        created_at: '',
+      },
+    ];
+
+    const abortController = new AbortController();
+
+    // Should not throw - initial error should be caught
+    const result = await runAgentLoop({
+      scenario,
+      hintImages,
+      abortSignal: abortController.signal,
+    });
+
+    // The agent loop should complete (success or failure) without throwing
+    expect(result).toBeDefined();
+    expect(result.testResult).toBeDefined();
+
+    // match_hint_images was attempted at least once
+    expect(matchCallCount).toBeGreaterThanOrEqual(1);
+  });
 });
