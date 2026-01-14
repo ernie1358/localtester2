@@ -30,6 +30,18 @@ const selectedIds = ref<Set<string>>(new Set());
 const isRunning = ref(false);
 const logs = ref<string[]>([]);
 
+// Action delay setting (ms after click actions before capturing screenshot)
+const LOCAL_STORAGE_KEY_ACTION_DELAY = 'xenotester_action_delay_ms';
+const actionDelayMs = ref(1000);
+const actionDelayOptions = [
+  { value: 0, label: '0秒' },
+  { value: 500, label: '0.5秒' },
+  { value: 1000, label: '1秒' },
+  { value: 2000, label: '2秒' },
+  { value: 3000, label: '3秒' },
+  { value: 5000, label: '5秒' },
+];
+
 // Modal state
 const showScenarioForm = ref(false);
 const editingScenario = ref<StoredScenario | null>(null);
@@ -46,6 +58,9 @@ const errorMessage = ref('');
 // ScenarioList ref
 const scenarioListRef = ref<InstanceType<typeof ScenarioList> | null>(null);
 
+// Auth subscription cleanup
+let authSubscription: { unsubscribe: () => void } | null = null;
+
 // Computed
 const selectedCount = computed(() => selectedIds.value.size);
 const canExecute = computed(
@@ -54,6 +69,21 @@ const canExecute = computed(
 
 // Lifecycle
 onMounted(async () => {
+  // Load action delay setting from localStorage
+  try {
+    const loadedDelay = localStorage.getItem(LOCAL_STORAGE_KEY_ACTION_DELAY);
+    if (loadedDelay !== null) {
+      const parsed = parseInt(loadedDelay, 10);
+      // Only accept values that exist in actionDelayOptions
+      if (actionDelayOptions.some(opt => opt.value === parsed)) {
+        actionDelayMs.value = parsed;
+      }
+    }
+  } catch (e) {
+    // localStorage not available, use default value
+    console.warn('Failed to load action delay setting from localStorage:', e);
+  }
+
   try {
     // Check authentication state
     isAuthenticated.value = await checkAuth();
@@ -65,7 +95,7 @@ onMounted(async () => {
 
     // Watch for session changes
     const client = await getSupabaseClient();
-    client.auth.onAuthStateChange((event, session) => {
+    const { data } = client.auth.onAuthStateChange((event, session) => {
       isAuthenticated.value = session !== null;
       if (event === 'SIGNED_OUT') {
         // Clear state on sign out
@@ -73,6 +103,7 @@ onMounted(async () => {
         selectedIds.value = new Set();
       }
     });
+    authSubscription = data.subscription;
   } catch (error) {
     console.error('Auth check error:', error);
     // On auth check failure, keep as unauthenticated
@@ -86,10 +117,9 @@ async function initializeApp() {
   try {
     // Check permissions
     permissionStatus.value = await invoke<PermissionStatus>('check_permissions');
-    // Check API key
-    apiKeyConfigured.value = await invoke<boolean>('is_api_key_configured', {
-      keyName: 'anthropic',
-    });
+    // API key is now managed server-side via Edge Function
+    // If authenticated, API is available
+    apiKeyConfigured.value = true;
     // Load scenarios
     await loadScenarios();
   } catch (error) {
@@ -105,6 +135,10 @@ async function handleAuthenticated() {
 }
 
 onUnmounted(async () => {
+  // Cleanup auth subscription
+  if (authSubscription) {
+    authSubscription.unsubscribe();
+  }
   await scenarioRunner.destroy();
 });
 
@@ -288,6 +322,9 @@ async function executeSelected() {
     const result = await runSelectedScenarios(orderedIds, scenarios.value, {
       stopOnFailure: false,
       onLog: addLog,
+      agentConfig: {
+        actionDelayMs: actionDelayMs.value,
+      },
     });
 
     addLog(
@@ -308,6 +345,15 @@ async function executeSelected() {
 function stopExecution() {
   scenarioRunner.stop();
   addLog('実行を停止しました');
+}
+
+function saveActionDelay() {
+  try {
+    localStorage.setItem(LOCAL_STORAGE_KEY_ACTION_DELAY, String(actionDelayMs.value));
+  } catch (e) {
+    // localStorage not available, ignore error
+    console.warn('Failed to save action delay setting to localStorage:', e);
+  }
 }
 
 function addLog(message: string) {
@@ -355,13 +401,6 @@ function addLog(message: string) {
       <button @click="requestPermissions">Request Permissions</button>
     </div>
 
-    <!-- API Key Warning -->
-    <div v-if="!apiKeyConfigured" class="warning-box">
-      <p>
-        <strong>API Key Required:</strong>
-        Please set ANTHROPIC_API_KEY in your .env file.
-      </p>
-    </div>
 
     <!-- Error Message -->
     <div v-if="errorMessage" class="error-box">
@@ -398,6 +437,23 @@ function addLog(message: string) {
         <span class="selected-count">
           {{ selectedCount }}件選択中
         </span>
+        <div class="action-delay-setting">
+          <label for="action-delay">各アクション後の待機時間:</label>
+          <select
+            id="action-delay"
+            v-model="actionDelayMs"
+            :disabled="isRunning"
+            @change="saveActionDelay"
+          >
+            <option
+              v-for="option in actionDelayOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
         <button
           v-if="!isRunning"
           @click="executeSelected"
@@ -573,6 +629,7 @@ h2 {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
   margin-top: 16px;
   padding: 16px;
   background: #f8f9fa;
@@ -582,6 +639,49 @@ h2 {
 @media (prefers-color-scheme: dark) {
   .execution-controls {
     background: #2a2a2a;
+  }
+}
+
+.action-delay-setting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.action-delay-setting label {
+  font-size: 13px;
+  color: #666;
+  white-space: nowrap;
+}
+
+.action-delay-setting select {
+  padding: 6px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.action-delay-setting select:disabled {
+  background: #eee;
+  cursor: not-allowed;
+}
+
+@media (prefers-color-scheme: dark) {
+  .action-delay-setting label {
+    color: #aaa;
+  }
+
+  .action-delay-setting select {
+    background: #333;
+    border-color: #555;
+    color: #fff;
+  }
+
+  .action-delay-setting select:disabled {
+    background: #444;
+    color: #888;
   }
 }
 
