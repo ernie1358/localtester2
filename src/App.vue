@@ -352,6 +352,8 @@ function stopExecution() {
 }
 
 // Watch for action delay changes and save to localStorage (only after initialization)
+// Use flush: 'sync' to ensure the watch callback runs synchronously when actionDelayMs changes,
+// so the actionDelayInitialized flag check works correctly during initial load
 watch(actionDelayMs, (newValue) => {
   if (!actionDelayInitialized) return;
   try {
@@ -360,7 +362,7 @@ watch(actionDelayMs, (newValue) => {
     // localStorage not available, ignore error
     console.warn('Failed to save action delay setting to localStorage:', e);
   }
-});
+}, { flush: 'sync' });
 
 function addLog(message: string) {
   const timestamp = new Date().toLocaleTimeString();
