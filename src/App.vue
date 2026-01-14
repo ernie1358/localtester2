@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import ScenarioList from './components/ScenarioList.vue';
 import ScenarioForm from './components/ScenarioForm.vue';
 import DeleteConfirmDialog from './components/DeleteConfirmDialog.vue';
@@ -29,6 +30,7 @@ const isCheckingAuth = ref(true);
 const scenarios = ref<StoredScenario[]>([]);
 const selectedIds = ref<Set<string>>(new Set());
 const isRunning = ref(false);
+const isStopping = ref(false);
 const logs = ref<string[]>([]);
 
 // Action delay setting (ms after click actions before capturing screenshot)
@@ -53,10 +55,13 @@ const scenarioListRef = ref<InstanceType<typeof ScenarioList> | null>(null);
 // Auth subscription cleanup
 let authSubscription: { unsubscribe: () => void } | null = null;
 
+// Emergency stop listener cleanup
+let emergencyStopUnlisten: UnlistenFn | null = null;
+
 // Computed
 const selectedCount = computed(() => selectedIds.value.size);
 const canExecute = computed(
-  () => selectedCount.value > 0 && !isRunning.value && apiKeyConfigured.value
+  () => selectedCount.value > 0 && !isRunning.value && !isStopping.value && apiKeyConfigured.value
 );
 
 // Lifecycle
@@ -81,6 +86,14 @@ onMounted(async () => {
       }
     });
     authSubscription = data.subscription;
+
+    // Set up emergency stop listener for UI state update
+    emergencyStopUnlisten = await listen('emergency-stop', () => {
+      if (isRunning.value && !isStopping.value) {
+        isStopping.value = true;
+        addLog('緊急停止が発動しました...');
+      }
+    });
   } catch (error) {
     console.error('Auth check error:', error);
     // On auth check failure, keep as unauthenticated
@@ -115,6 +128,10 @@ onUnmounted(async () => {
   // Cleanup auth subscription
   if (authSubscription) {
     authSubscription.unsubscribe();
+  }
+  // Cleanup emergency stop listener
+  if (emergencyStopUnlisten) {
+    emergencyStopUnlisten();
   }
   await scenarioRunner.destroy();
 });
@@ -316,12 +333,24 @@ async function executeSelected() {
     addLog(`エラー: ${msg}`);
   } finally {
     isRunning.value = false;
+    // Reset stopping state after execution completes
+    if (isStopping.value) {
+      isStopping.value = false;
+      addLog('停止処理が完了しました');
+    }
   }
 }
 
 function stopExecution() {
+  // Prevent double-click
+  if (isStopping.value) return;
+
+  isStopping.value = true;
+  addLog('停止処理を開始しています...');
+
+  // stop() sends stop signal and returns immediately
   scenarioRunner.stop();
-  addLog('実行を停止しました');
+  // Note: isStopping.value = false is set in executeSelected's finally block
 }
 
 function addLog(message: string) {
@@ -422,15 +451,20 @@ function addLog(message: string) {
           </select>
         </div>
         <button
-          v-if="!isRunning"
+          v-if="!isRunning && !isStopping"
           @click="executeSelected"
           :disabled="!canExecute"
           class="execute-button"
         >
           チェックしたテストステップを実行
         </button>
-        <button v-else @click="stopExecution" class="danger-button">
-          停止 (Shift+Esc)
+        <button
+          v-else
+          @click="stopExecution"
+          :disabled="isStopping"
+          :class="['danger-button', { 'stopping': isStopping }]"
+        >
+          {{ isStopping ? '停止中...' : '停止 (Shift+Esc)' }}
         </button>
       </div>
     </section>
@@ -695,8 +729,18 @@ h2 {
   cursor: pointer;
 }
 
-.danger-button:hover {
+.danger-button:hover:not(:disabled) {
   background-color: #c82333;
+}
+
+.danger-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.danger-button.stopping {
+  background-color: #6c757d;
+  cursor: wait;
 }
 
 .log-section {
