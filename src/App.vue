@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import ScenarioList from './components/ScenarioList.vue';
 import ScenarioForm from './components/ScenarioForm.vue';
@@ -41,6 +41,8 @@ const actionDelayOptions = [
   { value: 3000, label: '3秒' },
   { value: 5000, label: '5秒' },
 ];
+// Flag to prevent saving during initial load
+let actionDelayInitialized = false;
 
 // Modal state
 const showScenarioForm = ref(false);
@@ -83,6 +85,8 @@ onMounted(async () => {
     // localStorage not available, use default value
     console.warn('Failed to load action delay setting from localStorage:', e);
   }
+  // Mark as initialized after loading - watch will now save changes
+  actionDelayInitialized = true;
 
   try {
     // Check authentication state
@@ -347,14 +351,16 @@ function stopExecution() {
   addLog('実行を停止しました');
 }
 
-function saveActionDelay() {
+// Watch for action delay changes and save to localStorage (only after initialization)
+watch(actionDelayMs, (newValue) => {
+  if (!actionDelayInitialized) return;
   try {
-    localStorage.setItem(LOCAL_STORAGE_KEY_ACTION_DELAY, String(actionDelayMs.value));
+    localStorage.setItem(LOCAL_STORAGE_KEY_ACTION_DELAY, String(newValue));
   } catch (e) {
     // localStorage not available, ignore error
     console.warn('Failed to save action delay setting to localStorage:', e);
   }
-}
+});
 
 function addLog(message: string) {
   const timestamp = new Date().toLocaleTimeString();
@@ -443,7 +449,6 @@ function addLog(message: string) {
             id="action-delay"
             v-model="actionDelayMs"
             :disabled="isRunning"
-            @change="saveActionDelay"
           >
             <option
               v-for="option in actionDelayOptions"
