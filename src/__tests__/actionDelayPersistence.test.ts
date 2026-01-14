@@ -1,16 +1,22 @@
 /**
  * Action Delay Persistence Tests
  * Tests for localStorage persistence of the action delay setting
+ *
+ * Note: These tests verify the pure logic. For Vue watch behavior tests,
+ * see useActionDelay.test.ts which tests the composable with actual Vue reactivity.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  LOCAL_STORAGE_KEY_ACTION_DELAY,
+  DEFAULT_ACTION_DELAY_MS,
+  ACTION_DELAY_OPTIONS,
+} from '../constants/actionDelay';
 
-// localStorage key used in App.vue
-const LOCAL_STORAGE_KEY = 'xenotester_action_delay_ms';
-
-// Valid options from App.vue
-const VALID_OPTIONS = [0, 500, 1000, 2000, 3000, 5000];
-const DEFAULT_VALUE = 1000;
+// Derived constants for test compatibility
+const LOCAL_STORAGE_KEY = LOCAL_STORAGE_KEY_ACTION_DELAY;
+const VALID_OPTIONS: readonly number[] = ACTION_DELAY_OPTIONS.map(opt => opt.value);
+const DEFAULT_VALUE = DEFAULT_ACTION_DELAY_MS;
 
 describe('Action Delay Persistence', () => {
   // Mock localStorage

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import ScenarioList from './components/ScenarioList.vue';
 import ScenarioForm from './components/ScenarioForm.vue';
@@ -19,6 +19,7 @@ import {
 import { runSelectedScenarios, scenarioRunner } from './services/scenarioRunner';
 import { openResultWindow } from './services/resultWindowService';
 import type { StoredScenario, PermissionStatus, StepImage, FormImageData } from './types';
+import { useActionDelay } from './composables/useActionDelay';
 
 // Authentication state
 const isAuthenticated = ref(false);
@@ -31,18 +32,7 @@ const isRunning = ref(false);
 const logs = ref<string[]>([]);
 
 // Action delay setting (ms after click actions before capturing screenshot)
-const LOCAL_STORAGE_KEY_ACTION_DELAY = 'xenotester_action_delay_ms';
-const actionDelayMs = ref(1000);
-const actionDelayOptions = [
-  { value: 0, label: '0秒' },
-  { value: 500, label: '0.5秒' },
-  { value: 1000, label: '1秒' },
-  { value: 2000, label: '2秒' },
-  { value: 3000, label: '3秒' },
-  { value: 5000, label: '5秒' },
-];
-// Flag to prevent saving during initial load
-let actionDelayInitialized = false;
+const { actionDelayMs, actionDelayOptions } = useActionDelay();
 
 // Modal state
 const showScenarioForm = ref(false);
@@ -71,23 +61,6 @@ const canExecute = computed(
 
 // Lifecycle
 onMounted(async () => {
-  // Load action delay setting from localStorage
-  try {
-    const loadedDelay = localStorage.getItem(LOCAL_STORAGE_KEY_ACTION_DELAY);
-    if (loadedDelay !== null) {
-      const parsed = parseInt(loadedDelay, 10);
-      // Only accept values that exist in actionDelayOptions
-      if (actionDelayOptions.some(opt => opt.value === parsed)) {
-        actionDelayMs.value = parsed;
-      }
-    }
-  } catch (e) {
-    // localStorage not available, use default value
-    console.warn('Failed to load action delay setting from localStorage:', e);
-  }
-  // Mark as initialized after loading - watch will now save changes
-  actionDelayInitialized = true;
-
   try {
     // Check authentication state
     isAuthenticated.value = await checkAuth();
@@ -350,19 +323,6 @@ function stopExecution() {
   scenarioRunner.stop();
   addLog('実行を停止しました');
 }
-
-// Watch for action delay changes and save to localStorage (only after initialization)
-// Use flush: 'sync' to ensure the watch callback runs synchronously when actionDelayMs changes,
-// so the actionDelayInitialized flag check works correctly during initial load
-watch(actionDelayMs, (newValue) => {
-  if (!actionDelayInitialized) return;
-  try {
-    localStorage.setItem(LOCAL_STORAGE_KEY_ACTION_DELAY, String(newValue));
-  } catch (e) {
-    // localStorage not available, ignore error
-    console.warn('Failed to save action delay setting to localStorage:', e);
-  }
-}, { flush: 'sync' });
 
 function addLog(message: string) {
   const timestamp = new Date().toLocaleTimeString();
