@@ -15,7 +15,7 @@ import type {
 } from '../types';
 import type { ComputerAction, ComputerActionType } from '../types';
 import { hashAction } from '../utils/loopDetector';
-import { getClaudeClient } from './claudeClient';
+import { callClaudeMessagesViaProxy } from './claudeClient';
 
 /** Configuration for stuck detection */
 export interface StuckDetectionConfig {
@@ -115,11 +115,13 @@ export function hasSignificantScreenChange(
  * 画面変化が起きにくいアクションかどうかを判定
  */
 function isNonProgressiveAction(action: ComputerAction): boolean {
+  // Non-progressive actions: actions that don't cause visible screen changes
+  // scroll is excluded because it should cause visible screen changes when it works correctly
   const nonProgressiveActions: ComputerActionType[] = [
     'wait',
     'screenshot',
     'mouse_move',
-    'scroll',
+    'hold_key',  // 修飾キー保持は画面変化を起こさない
   ];
   return nonProgressiveActions.includes(action.action);
 }
@@ -336,7 +338,6 @@ export async function verifyFallbackCompletion(
   }
 ): Promise<AdditionalConfirmation> {
   try {
-    const client = await getClaudeClient();
     const VISION_MODEL = 'claude-sonnet-4-20250514';
 
     let prompt = `
@@ -399,24 +400,17 @@ export async function verifyFallbackCompletion(
       },
     });
 
-    const messages: Array<{
-      role: 'user' | 'assistant';
-      content: Array<
-        | { type: 'text'; text: string }
-        | { type: 'image'; source: { type: 'base64'; media_type: 'image/png'; data: string } }
-      >;
-    }> = [
-      {
-        role: 'user',
-        content: contentArray,
-      },
-    ];
-
-    const response = await client.messages.create({
-      model: VISION_MODEL,
-      max_tokens: 256,
-      messages,
-    });
+    const response = await callClaudeMessagesViaProxy(
+      VISION_MODEL,
+      256,
+      '',
+      [
+        {
+          role: 'user',
+          content: contentArray,
+        },
+      ]
+    );
 
     const content = response.content[0];
     if (content.type !== 'text') {

@@ -37,7 +37,45 @@ export async function openResultWindow(
   // Store result for potential deferred sending
   pendingResult = result;
 
-  // Create new window
+  // Set up handshake state BEFORE creating window to avoid race condition
+  let resolveHandshake: (value: boolean) => void;
+  const handshakePromise = new Promise<boolean>((resolve) => {
+    resolveHandshake = resolve;
+  });
+
+  let timedOut = false;
+  let readyReceived = false;
+
+  // Helper to send result when ready
+  const sendResultWhenReady = async () => {
+    if (pendingResult && resultWindow) {
+      const resultToSend = pendingResult;
+      pendingResult = null;
+      await resultWindow.emit('execution-result', resultToSend);
+    }
+  };
+
+  // Set up listener BEFORE creating window to catch early ready signals
+  readyUnlisten = await listen('result-window-ready', async () => {
+    if (readyReceived) return; // Prevent duplicate handling
+    readyReceived = true;
+
+    // Clean up listener
+    if (readyUnlisten) {
+      readyUnlisten();
+      readyUnlisten = null;
+    }
+
+    // Send result
+    await sendResultWhenReady();
+
+    // Resolve the handshake if not timed out
+    if (!timedOut) {
+      resolveHandshake(true);
+    }
+  });
+
+  // Create new window AFTER listener is set up
   resultWindow = new WebviewWindow('result', {
     url: '/result.html',
     title: '実行結果 - Xenotester',
@@ -58,47 +96,14 @@ export async function openResultWindow(
     });
   });
 
-  // Set up persistent listener for ready signal
-  // This ensures result is sent even if ready signal comes after timeout
-  const sendResultWhenReady = async () => {
-    if (pendingResult && resultWindow) {
-      const resultToSend = pendingResult;
-      pendingResult = null;
-      await resultWindow.emit('execution-result', resultToSend);
-    }
-  };
+  // Bring window to front (best-effort: don't fail if focus fails)
+  try {
+    await resultWindow.setFocus();
+  } catch {
+    console.warn('[ResultWindow] Failed to set focus - window may still be visible');
+  }
 
-  // Handshake: wait for result window to signal readiness
-  // Set up listener first, then start timeout
-  let resolveHandshake: (value: boolean) => void;
-  const handshakePromise = new Promise<boolean>((resolve) => {
-    resolveHandshake = resolve;
-  });
-
-  let timedOut = false;
-  let readyReceived = false;
-
-  // Set up listener first
-  readyUnlisten = await listen('result-window-ready', async () => {
-    if (readyReceived) return; // Prevent duplicate handling
-    readyReceived = true;
-
-    // Clean up listener
-    if (readyUnlisten) {
-      readyUnlisten();
-      readyUnlisten = null;
-    }
-
-    // Send result
-    await sendResultWhenReady();
-
-    // If we haven't timed out yet, resolve the handshake
-    if (!timedOut) {
-      resolveHandshake(true);
-    }
-  });
-
-  // Start timeout after listener is set up
+  // Start timeout after window is created
   const timeoutId = setTimeout(() => {
     if (readyReceived) return; // Ready already received
     timedOut = true;

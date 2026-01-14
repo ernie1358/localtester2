@@ -22,13 +22,7 @@ const mockCreate = vi.fn();
 
 // Mock claudeClient
 vi.mock('../services/claudeClient', () => ({
-  getClaudeClient: vi.fn().mockResolvedValue({
-    beta: {
-      messages: {
-        create: (...args: unknown[]) => mockCreate(...args),
-      },
-    },
-  }),
+  callClaudeAPIViaProxy: (...args: unknown[]) => mockCreate(...args),
   buildComputerTool: vi.fn().mockReturnValue({
     type: 'computer_20241022',
     name: 'computer',
@@ -644,9 +638,11 @@ describe('runAgentLoop - Screen Change Re-matching', () => {
     // Look for the tool_result that contains the invalidation message
     // The tool_result structure is:
     // { type: 'tool_result', tool_use_id: ..., content: [{ type: 'text', text: '...' }, ...] }
+    // Note: callClaudeAPIViaProxy takes (messages, captureResult, modelConfig, systemPrompt)
+    // so messages is call[0] directly (not call[0].messages)
     const apiCalls = mockCreate.mock.calls;
     const hasInvalidationMessage = apiCalls.some((call) => {
-      const messages = call[0]?.messages;
+      const messages = call[0];
       if (!Array.isArray(messages)) return false;
       return messages.some(
         (msg: {

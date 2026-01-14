@@ -21,6 +21,8 @@ export type FailureReason =
   | 'unexpected_state'      // 期待と異なる画面状態
   | 'action_mismatch'       // ユーザー期待アクションと不一致
   | 'incomplete_actions'    // 期待アクションが全て完了していない
+  | 'verification_failed'   // 期待テキストが画面に表示されなかった
+  | 'extraction_failed'     // 期待アクション抽出に失敗
   | 'invalid_result_format' // Claudeが結果スキーマに準拠しなかった（補助的理由）
   | 'max_iterations'        // 最大イテレーション到達
   | 'api_error'             // Claude API エラー
@@ -80,6 +82,7 @@ export interface ExpectedAction {
   keywords: string[];            // 期待されるキーワード（例: ["chrome", "click"]）
   targetElements?: string[];     // 対象要素名（例: ["Chrome icon", "アドレスバー"]）
   expectedToolAction?: string;   // 期待されるtool_useのアクション種別
+  verificationText?: string;     // アクション後に表示されるべきテキスト（検証用）
   completed: boolean;
 }
 

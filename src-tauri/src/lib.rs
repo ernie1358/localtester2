@@ -35,7 +35,10 @@ fn get_migrations() -> Vec<Migration> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Load environment variables from .env file
-    dotenv::dotenv().ok();
+    // Try src-tauri/.env first, then project root/.env
+    if dotenv::dotenv().is_err() {
+        let _ = dotenv::from_filename("../.env");
+    }
 
     tauri::Builder::default()
         // Initialize plugins

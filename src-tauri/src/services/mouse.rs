@@ -6,6 +6,24 @@ use std::time::Duration;
 
 use crate::error::XenotesterError;
 
+// Mouse timing constants
+// On macOS, the window manager needs more time to register mouse position
+// and update hover state before a click can be properly received
+#[cfg(target_os = "macos")]
+const MOUSE_MOVE_SETTLE_DELAY_MS: u64 = 200;
+#[cfg(not(target_os = "macos"))]
+const MOUSE_MOVE_SETTLE_DELAY_MS: u64 = 50;
+
+// Post-action delay to ensure system processes the input
+const POST_ACTION_DELAY_MS: u64 = 20;
+
+// Delay between clicks for double/triple click
+const MULTI_CLICK_INTERVAL_MS: u64 = 50;
+
+// Delay for drag operations - consistent across platforms since drag
+// involves multiple coordinated actions that require reliable timing
+const DRAG_STEP_DELAY_MS: u64 = 50;
+
 /// Mouse button types
 #[derive(Debug, Clone, Copy)]
 pub enum MouseButton {
@@ -55,13 +73,18 @@ pub fn click(x: i32, y: i32, button: MouseButton) -> Result<(), XenotesterError>
         .move_mouse(x, y, Coordinate::Abs)
         .map_err(|e| XenotesterError::InputError(e.to_string()))?;
 
-    // Small delay for position to settle
-    thread::sleep(Duration::from_millis(10));
+    // Wait for window manager to register mouse position
+    thread::sleep(Duration::from_millis(MOUSE_MOVE_SETTLE_DELAY_MS));
 
     // Click
     enigo
         .button(button.into(), Direction::Click)
-        .map_err(|e| XenotesterError::InputError(e.to_string()))
+        .map_err(|e| XenotesterError::InputError(e.to_string()))?;
+
+    // Wait for system to process the click
+    thread::sleep(Duration::from_millis(POST_ACTION_DELAY_MS));
+
+    Ok(())
 }
 
 /// Double click at absolute position
@@ -73,18 +96,24 @@ pub fn double_click(x: i32, y: i32) -> Result<(), XenotesterError> {
         .move_mouse(x, y, Coordinate::Abs)
         .map_err(|e| XenotesterError::InputError(e.to_string()))?;
 
-    thread::sleep(Duration::from_millis(10));
+    // Wait for window manager to register mouse position
+    thread::sleep(Duration::from_millis(MOUSE_MOVE_SETTLE_DELAY_MS));
 
-    // Double click
+    // Double click - interval must be short enough to register as double click
     enigo
         .button(Button::Left, Direction::Click)
         .map_err(|e| XenotesterError::InputError(e.to_string()))?;
 
-    thread::sleep(Duration::from_millis(50));
+    thread::sleep(Duration::from_millis(MULTI_CLICK_INTERVAL_MS));
 
     enigo
         .button(Button::Left, Direction::Click)
-        .map_err(|e| XenotesterError::InputError(e.to_string()))
+        .map_err(|e| XenotesterError::InputError(e.to_string()))?;
+
+    // Wait for system to process the clicks
+    thread::sleep(Duration::from_millis(POST_ACTION_DELAY_MS));
+
+    Ok(())
 }
 
 /// Triple click at absolute position
@@ -96,15 +125,19 @@ pub fn triple_click(x: i32, y: i32) -> Result<(), XenotesterError> {
         .move_mouse(x, y, Coordinate::Abs)
         .map_err(|e| XenotesterError::InputError(e.to_string()))?;
 
-    thread::sleep(Duration::from_millis(10));
+    // Wait for window manager to register mouse position
+    thread::sleep(Duration::from_millis(MOUSE_MOVE_SETTLE_DELAY_MS));
 
-    // Triple click
+    // Triple click - interval must be short enough to register as triple click
     for _ in 0..3 {
         enigo
             .button(Button::Left, Direction::Click)
             .map_err(|e| XenotesterError::InputError(e.to_string()))?;
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(MULTI_CLICK_INTERVAL_MS));
     }
+
+    // Wait for system to process the clicks
+    thread::sleep(Duration::from_millis(POST_ACTION_DELAY_MS));
 
     Ok(())
 }
@@ -117,11 +150,17 @@ pub fn mouse_down(x: i32, y: i32, button: MouseButton) -> Result<(), XenotesterE
         .move_mouse(x, y, Coordinate::Abs)
         .map_err(|e| XenotesterError::InputError(e.to_string()))?;
 
-    thread::sleep(Duration::from_millis(10));
+    // Wait for window manager to register mouse position
+    thread::sleep(Duration::from_millis(MOUSE_MOVE_SETTLE_DELAY_MS));
 
     enigo
         .button(button.into(), Direction::Press)
-        .map_err(|e| XenotesterError::InputError(e.to_string()))
+        .map_err(|e| XenotesterError::InputError(e.to_string()))?;
+
+    // Wait for system to process the press
+    thread::sleep(Duration::from_millis(POST_ACTION_DELAY_MS));
+
+    Ok(())
 }
 
 /// Mouse up at absolute position
@@ -132,11 +171,17 @@ pub fn mouse_up(x: i32, y: i32, button: MouseButton) -> Result<(), XenotesterErr
         .move_mouse(x, y, Coordinate::Abs)
         .map_err(|e| XenotesterError::InputError(e.to_string()))?;
 
-    thread::sleep(Duration::from_millis(10));
+    // Wait for window manager to register mouse position
+    thread::sleep(Duration::from_millis(MOUSE_MOVE_SETTLE_DELAY_MS));
 
     enigo
         .button(button.into(), Direction::Release)
-        .map_err(|e| XenotesterError::InputError(e.to_string()))
+        .map_err(|e| XenotesterError::InputError(e.to_string()))?;
+
+    // Wait for system to process the release
+    thread::sleep(Duration::from_millis(POST_ACTION_DELAY_MS));
+
+    Ok(())
 }
 
 /// Drag from start position to end position
@@ -148,26 +193,32 @@ pub fn drag(start_x: i32, start_y: i32, end_x: i32, end_y: i32) -> Result<(), Xe
         .move_mouse(start_x, start_y, Coordinate::Abs)
         .map_err(|e| XenotesterError::InputError(e.to_string()))?;
 
-    thread::sleep(Duration::from_millis(50));
+    // Wait for position to settle (consistent timing for reliable drag)
+    thread::sleep(Duration::from_millis(DRAG_STEP_DELAY_MS));
 
     // Press left button
     enigo
         .button(Button::Left, Direction::Press)
         .map_err(|e| XenotesterError::InputError(e.to_string()))?;
 
-    thread::sleep(Duration::from_millis(50));
+    thread::sleep(Duration::from_millis(DRAG_STEP_DELAY_MS));
 
     // Move to end position
     enigo
         .move_mouse(end_x, end_y, Coordinate::Abs)
         .map_err(|e| XenotesterError::InputError(e.to_string()))?;
 
-    thread::sleep(Duration::from_millis(50));
+    thread::sleep(Duration::from_millis(DRAG_STEP_DELAY_MS));
 
     // Release left button
     enigo
         .button(Button::Left, Direction::Release)
-        .map_err(|e| XenotesterError::InputError(e.to_string()))
+        .map_err(|e| XenotesterError::InputError(e.to_string()))?;
+
+    // Wait for system to process the drag completion
+    thread::sleep(Duration::from_millis(POST_ACTION_DELAY_MS));
+
+    Ok(())
 }
 
 /// Scroll at position
@@ -179,7 +230,8 @@ pub fn scroll(x: i32, y: i32, direction: ScrollDirection, amount: i32) -> Result
         .move_mouse(x, y, Coordinate::Abs)
         .map_err(|e| XenotesterError::InputError(e.to_string()))?;
 
-    thread::sleep(Duration::from_millis(10));
+    // Wait for window manager to register mouse position
+    thread::sleep(Duration::from_millis(MOUSE_MOVE_SETTLE_DELAY_MS));
 
     // Scroll
     let (dx, dy) = match direction {
@@ -195,5 +247,10 @@ pub fn scroll(x: i32, y: i32, direction: ScrollDirection, amount: i32) -> Result
 
     enigo
         .scroll(dy, enigo::Axis::Vertical)
-        .map_err(|e| XenotesterError::InputError(e.to_string()))
+        .map_err(|e| XenotesterError::InputError(e.to_string()))?;
+
+    // Wait for system to process the scroll
+    thread::sleep(Duration::from_millis(POST_ACTION_DELAY_MS));
+
+    Ok(())
 }

@@ -13,9 +13,9 @@ defineEmits<{
 <template>
   <div v-if="visible" class="modal-overlay" @click.self="$emit('cancel')">
     <div class="modal delete-confirm-modal">
-      <h2>シナリオの削除</h2>
+      <h2>テストステップの削除</h2>
       <p class="confirm-message">
-        以下のシナリオを削除してもよろしいですか？<br />
+        以下のテストステップを削除してもよろしいですか？<br />
         この操作は取り消せません。
       </p>
       <p class="scenario-name">「{{ scenarioTitle }}」</p>

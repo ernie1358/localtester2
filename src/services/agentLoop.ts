@@ -11,7 +11,7 @@ import type {
   BetaToolResultBlockParam,
   BetaTextBlock,
 } from '@anthropic-ai/sdk/resources/beta/messages';
-import { getClaudeClient, buildComputerTool, RESULT_SCHEMA_INSTRUCTION } from './claudeClient';
+import { callClaudeAPIViaProxy, RESULT_SCHEMA_INSTRUCTION } from './claudeClient';
 import { purgeOldImages } from './historyManager';
 import { toScreenCoordinate } from '../utils/coordinateScaler';
 import { detectLoop, createActionRecord } from '../utils/loopDetector';
@@ -23,12 +23,12 @@ import {
   createProgressTracker,
   DEFAULT_STUCK_DETECTION_CONFIG,
   mapExecutionErrorToFailureReason,
-  verifyFallbackCompletion,
 } from './resultJudge';
 import {
   extractExpectedActions,
   validateActionAndCheckProgress,
   askClaudeForActionCompletion,
+  verifyTextOnScreen,
 } from './actionValidator';
 import type {
   Scenario,
@@ -45,6 +45,47 @@ import type {
   MatchErrorCode,
 } from '../types';
 import { DEFAULT_AGENT_LOOP_CONFIG, DEFAULT_CLAUDE_MODEL_CONFIG } from '../types';
+
+// Verification retry configuration
+const VERIFICATION_MAX_RETRIES = 3;
+const VERIFICATION_RETRY_DELAY_MS = 1000;
+
+/**
+ * Verify text on screen with retry support
+ * Retries verification up to VERIFICATION_MAX_RETRIES times if verification fails
+ * This handles cases where UI takes time to update after actions
+ */
+async function verifyTextWithRetry(
+  verificationText: string,
+  getCurrentScreenshot: () => Promise<CaptureResult>,
+  initialScreenshot: string,
+  log: (message: string) => void
+): Promise<{
+  result: { verified: boolean; reason?: string; isError?: boolean };
+  retryCount: number;
+  latestScreenshot: CaptureResult | null;
+}> {
+  let currentScreenshotBase64 = initialScreenshot;
+  let latestCaptureResult: CaptureResult | null = null;
+
+  let verifyResult = await verifyTextOnScreen(verificationText, currentScreenshotBase64);
+
+  // Retry if verification failed (but not for API errors)
+  let retryCount = 0;
+  while (!verifyResult.verified && !verifyResult.isError && retryCount < VERIFICATION_MAX_RETRIES) {
+    retryCount++;
+    log(`[Agent Loop] Verification retry ${retryCount}/${VERIFICATION_MAX_RETRIES} - waiting for UI update...`);
+    await new Promise(resolve => setTimeout(resolve, VERIFICATION_RETRY_DELAY_MS));
+
+    // Take a fresh screenshot
+    latestCaptureResult = await getCurrentScreenshot();
+    currentScreenshotBase64 = latestCaptureResult.imageBase64;
+
+    verifyResult = await verifyTextOnScreen(verificationText, currentScreenshotBase64);
+  }
+
+  return { result: verifyResult, retryCount, latestScreenshot: latestCaptureResult };
+}
 
 /** Options for agent loop */
 export interface AgentLoopOptions {
@@ -129,7 +170,8 @@ export async function runAgentLoop(
 
   // Expected actions and progress tracking
   let expectedActions: ExpectedAction[] = [];
-  let isFromFallback = false;
+  // Note: isFromFallback is always false now (fallback removed)
+  const isFromFallback = false;
   let completedActionIndex = 0;
   const completedToolUseDescriptions: string[] = [];
   const progressTracker: ProgressTracker = createProgressTracker();
@@ -158,10 +200,33 @@ export async function runAgentLoop(
   try {
     // Extract expected actions from scenario
     log('[Agent Loop] Extracting expected actions from scenario...');
-    const extractResult = await extractExpectedActions(options.scenario.description);
-    expectedActions = extractResult.expectedActions;
-    isFromFallback = extractResult.isFromFallback;
-    log(`[Agent Loop] Extracted ${expectedActions.length} expected actions (fallback: ${isFromFallback})`);
+    try {
+      const extractResult = await extractExpectedActions(options.scenario.description);
+      expectedActions = extractResult.expectedActions;
+      log(`[Agent Loop] Extracted ${expectedActions.length} expected actions`);
+    } catch (extractError) {
+      // Extraction failure should be status: 'failure' (not 'error')
+      // This is a test failure, not a system error
+      const errorMessage = extractError instanceof Error ? extractError.message : String(extractError);
+      log(`[Agent Loop] Expected action extraction failed: ${errorMessage}`);
+      return {
+        success: false,
+        error: `Failed to extract expected actions: ${errorMessage}`,
+        iterations: 0,
+        testResult: createTestResult({
+          status: 'failure',
+          failureReason: 'extraction_failed',
+          failureDetails: errorMessage,
+          completedSteps: 0,
+          completedActionIndex: 0,
+          startedAt,
+        }),
+        expectedActions: [],
+        isFromFallback: false,
+        executedActions: [],
+        completedActionCount: 0,
+      };
+    }
 
     // Initial screenshot
     log('[Agent Loop] Capturing initial screenshot...');
@@ -226,12 +291,21 @@ export async function runAgentLoop(
           `[Agent Loop] Template matching completed: ${foundCount}/${matchResults.length} found, ${errorCount} errors`
         );
 
-        // Log individual errors (processing continues)
-        matchResults
-          .filter((r) => r.matchResult.error)
-          .forEach((r) =>
-            log(`[Agent Loop] Template match error for ${r.fileName}: ${r.matchResult.error}`)
-          );
+        // Log detailed results for each image (for debugging coordinate/confidence issues)
+        for (const r of matchResults) {
+          if (r.matchResult.found) {
+            log(
+              `[Agent Loop] ✓ ${r.fileName}: found at (${r.matchResult.centerX}, ${r.matchResult.centerY}), confidence=${r.matchResult.confidence?.toFixed(3)}`
+            );
+          } else if (r.matchResult.error) {
+            log(`[Agent Loop] ✗ ${r.fileName}: error - ${r.matchResult.error}`);
+          } else {
+            // Not found, but no error - confidence below threshold
+            log(
+              `[Agent Loop] ✗ ${r.fileName}: not found, confidence=${r.matchResult.confidence?.toFixed(3)} (threshold=0.7)`
+            );
+          }
+        }
 
         // Store initial match results for re-matching later
         for (const result of matchResults) {
@@ -391,27 +465,12 @@ export async function runAgentLoop(
       lastClaudeResponseText = textBlocks.map((b) => b.text).join('\n');
 
       // Analyze Claude response using unified judgment flow (v18)
-      // For fallback mode, we need additional confirmation
-      let additionalConfirmation = undefined;
-      if (isFromFallback && !response.content.some((block) => block.type === 'tool_use')) {
-        // Fallback mode and no tool_use - verify completion
-        additionalConfirmation = await verifyFallbackCompletion(
-          options.scenario.description,
-          captureResult.imageBase64,
-          expectedActions[0]?.keywords || [],
-          {
-            previousScreenshotBase64,
-            lastExecutedAction: completedToolUseDescriptions[completedToolUseDescriptions.length - 1],
-          }
-        );
-      }
-
       const analyzeResult = analyzeClaudeResponse(
         response,
         expectedActions,
         completedActionIndex,
-        isFromFallback,
-        additionalConfirmation
+        false,  // isFromFallback is always false now (fallback removed)
+        undefined  // additionalConfirmation not needed
       );
 
       if (analyzeResult.isComplete) {
@@ -607,6 +666,14 @@ export async function runAgentLoop(
         const previousScreenshotForComparison = captureResult.imageBase64;
         previousScreenshotBase64 = captureResult.imageBase64;
 
+        // Wait for UI to update after click actions
+        // Dialogs and other UI elements may appear asynchronously after clicks
+        const actionDelayMs = config.actionDelayMs ?? 1000;
+        const clickActions = ['left_click', 'right_click', 'double_click', 'triple_click', 'middle_click'];
+        if (clickActions.includes(action.action) && actionDelayMs > 0) {
+          await new Promise(resolve => setTimeout(resolve, actionDelayMs));
+        }
+
         // Capture result screenshot
         captureResult = await invoke<CaptureResult>('capture_screen');
 
@@ -626,19 +693,154 @@ export async function runAgentLoop(
           screenChanged
         );
 
+        // Debug: Log validation details for troubleshooting
+        if (completedActionIndex < expectedActions.length) {
+          const currentExpected = expectedActions[completedActionIndex];
+          log(`[Agent Loop] Validation: action=${action.action}, expected="${currentExpected.description}", expectedTool=${currentExpected.expectedToolAction}, confidence=${validation.confidence}, shouldAdvance=${validation.shouldAdvanceIndex}, screenChanged=${screenChanged}, reason=${validation.reason || 'none'}`);
+        }
+
         if (validation.shouldAdvanceIndex) {
           // High confidence match with screen change
           if (expectedActions.length > completedActionIndex) {
-            expectedActions[completedActionIndex].completed = true;
-            log(`[Agent Loop] Expected action completed (high confidence, screen changed): ${expectedActions[completedActionIndex].description}`);
-            completedActionIndex++;
-            mediumConfidenceActionCount = 0;
-            lowMediumConfidenceCount = 0;
+            const currentExpected = expectedActions[completedActionIndex];
+
+            // If verificationText is set, verify the text appears on screen
+            if (currentExpected.verificationText) {
+              log(`[Agent Loop] Verifying text: "${currentExpected.verificationText}"`);
+
+              const { result: verifyResult, retryCount, latestScreenshot } = await verifyTextWithRetry(
+                currentExpected.verificationText,
+                () => invoke<CaptureResult>('capture_screen'),
+                captureResult.imageBase64,
+                log
+              );
+
+              // Update captureResult if we took new screenshots during retry
+              if (latestScreenshot) {
+                captureResult = latestScreenshot;
+              }
+
+              if (verifyResult.verified) {
+                currentExpected.completed = true;
+                log(`[Agent Loop] Expected action completed (verified text found${retryCount > 0 ? ` after ${retryCount} retries` : ''}): ${currentExpected.description}`);
+                log(`[Agent Loop] Verification reason: ${verifyResult.reason}`);
+                completedActionIndex++;
+                mediumConfidenceActionCount = 0;
+                lowMediumConfidenceCount = 0;
+              } else {
+                // Verification failed - immediate failure
+                // Distinguish between API/parse errors and actual verification failures
+                const isApiError = verifyResult.isError === true;
+                const failureReason = isApiError ? 'api_error' : 'verification_failed';
+                const errorPrefix = isApiError ? 'Verification API error' : 'Verification failed';
+                const failureDetailsText = isApiError
+                  ? `Verification API/parse error for text "${currentExpected.verificationText}". Reason: ${verifyResult.reason}`
+                  : `Expected text "${currentExpected.verificationText}" not found on screen after ${VERIFICATION_MAX_RETRIES} retries. Reason: ${verifyResult.reason}`;
+                log(`[Agent Loop] ${errorPrefix} - text "${currentExpected.verificationText}"${retryCount > 0 ? ` (after ${retryCount} retries)` : ''}`);
+                log(`[Agent Loop] Verification reason: ${verifyResult.reason}`);
+                return {
+                  success: false,
+                  error: `${errorPrefix}: "${currentExpected.verificationText}"`,
+                  iterations: iteration,
+                  testResult: createTestResult({
+                    status: 'failure',
+                    failureReason,
+                    failureDetails: failureDetailsText,
+                    completedSteps: iteration,
+                    completedActionIndex,
+                    lastAction: actionDetails,
+                    startedAt,
+                  }),
+                  expectedActions,
+                  isFromFallback,
+                  executedActions,
+                  completedActionCount: executedActions.filter((a) => a.success).length,
+                  lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
+                  failedAtAction: isApiError
+                    ? `Verification API error: "${currentExpected.verificationText}"`
+                    : `Verification: "${currentExpected.verificationText}" not found`,
+                };
+              }
+            } else {
+              // No verification text - use standard completion
+              currentExpected.completed = true;
+              log(`[Agent Loop] Expected action completed (high confidence, screen changed): ${currentExpected.description}`);
+              completedActionIndex++;
+              mediumConfidenceActionCount = 0;
+              lowMediumConfidenceCount = 0;
+            }
           }
         } else if (validation.confidence === 'high' && validation.requiresScreenChange && !screenChanged) {
-          // High confidence but no screen change
-          log('[Agent Loop] High confidence match but no screen change - not advancing index');
-          mediumConfidenceActionCount++;
+          // High confidence but no screen change - check verificationText if available
+          if (expectedActions.length > completedActionIndex) {
+            const currentExpected = expectedActions[completedActionIndex];
+
+            // If verificationText is set, check it even without screen change
+            if (currentExpected.verificationText) {
+              log(`[Agent Loop] High confidence, no screen change - checking verificationText: "${currentExpected.verificationText}"`);
+
+              const { result: verifyResult, retryCount, latestScreenshot } = await verifyTextWithRetry(
+                currentExpected.verificationText,
+                () => invoke<CaptureResult>('capture_screen'),
+                captureResult.imageBase64,
+                log
+              );
+
+              // Update captureResult if we took new screenshots during retry
+              if (latestScreenshot) {
+                captureResult = latestScreenshot;
+              }
+
+              if (verifyResult.verified) {
+                // Verification success overrides screen change requirement
+                currentExpected.completed = true;
+                log(`[Agent Loop] Expected action completed (verified text found${retryCount > 0 ? ` after ${retryCount} retries` : ''}, no screen change needed): ${currentExpected.description}`);
+                log(`[Agent Loop] Verification reason: ${verifyResult.reason}`);
+                completedActionIndex++;
+                mediumConfidenceActionCount = 0;
+                lowMediumConfidenceCount = 0;
+              } else {
+                // Verification failed - immediate failure
+                // Distinguish between API/parse errors and actual verification failures
+                const isApiError = verifyResult.isError === true;
+                const failureReason = isApiError ? 'api_error' : 'verification_failed';
+                const errorPrefix = isApiError ? 'Verification API error' : 'Verification failed';
+                const failureDetailsText = isApiError
+                  ? `Verification API/parse error for text "${currentExpected.verificationText}". Reason: ${verifyResult.reason}`
+                  : `Expected text "${currentExpected.verificationText}" not found on screen after ${VERIFICATION_MAX_RETRIES} retries. Reason: ${verifyResult.reason}`;
+                log(`[Agent Loop] ${errorPrefix} - text "${currentExpected.verificationText}"${retryCount > 0 ? ` (after ${retryCount} retries)` : ''}`);
+                log(`[Agent Loop] Verification reason: ${verifyResult.reason}`);
+                return {
+                  success: false,
+                  error: `${errorPrefix}: "${currentExpected.verificationText}"`,
+                  iterations: iteration,
+                  testResult: createTestResult({
+                    status: 'failure',
+                    failureReason,
+                    failureDetails: failureDetailsText,
+                    completedSteps: iteration,
+                    completedActionIndex,
+                    lastAction: actionDetails,
+                    startedAt,
+                  }),
+                  expectedActions,
+                  isFromFallback,
+                  executedActions,
+                  completedActionCount: executedActions.filter((a) => a.success).length,
+                  lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
+                  failedAtAction: isApiError
+                    ? `Verification API error: "${currentExpected.verificationText}"`
+                    : `Verification: "${currentExpected.verificationText}" not found`,
+                };
+              }
+            } else {
+              log('[Agent Loop] High confidence match but no screen change - not advancing index');
+              mediumConfidenceActionCount++;
+            }
+          } else {
+            log('[Agent Loop] High confidence match but no screen change - not advancing index');
+            mediumConfidenceActionCount++;
+          }
         } else if (validation.confidence === 'medium') {
           // Medium confidence
           mediumConfidenceActionCount++;
@@ -662,13 +864,135 @@ export async function runAgentLoop(
             );
 
             if (completionCheck.isCompleted && screenChanged) {
-              expectedActions[completedActionIndex].completed = true;
-              log(`[Agent Loop] Expected action completed (Claude verified, screen changed): ${expectedActions[completedActionIndex].description}`);
-              completedActionIndex++;
-              mediumConfidenceActionCount = 0;
-              lowMediumConfidenceCount = 0;
+              const currentExpected = expectedActions[completedActionIndex];
+
+              // If verificationText is set, verify the text appears on screen
+              if (currentExpected.verificationText) {
+                log(`[Agent Loop] Verifying text: "${currentExpected.verificationText}"`);
+
+                const { result: verifyResult, retryCount, latestScreenshot } = await verifyTextWithRetry(
+                  currentExpected.verificationText,
+                  () => invoke<CaptureResult>('capture_screen'),
+                  captureResult.imageBase64,
+                  log
+                );
+
+                // Update captureResult if we took new screenshots during retry
+                if (latestScreenshot) {
+                  captureResult = latestScreenshot;
+                }
+
+                if (verifyResult.verified) {
+                  currentExpected.completed = true;
+                  log(`[Agent Loop] Expected action completed (Claude + text verified${retryCount > 0 ? ` after ${retryCount} retries` : ''}): ${currentExpected.description}`);
+                  log(`[Agent Loop] Verification reason: ${verifyResult.reason}`);
+                  completedActionIndex++;
+                  mediumConfidenceActionCount = 0;
+                  lowMediumConfidenceCount = 0;
+                } else {
+                  // Verification failed - immediate failure
+                  // Distinguish between API/parse errors and actual verification failures
+                  const isApiError = verifyResult.isError === true;
+                  const failureReason = isApiError ? 'api_error' : 'verification_failed';
+                  const errorPrefix = isApiError ? 'Verification API error' : 'Verification failed';
+                  const failureDetailsText = isApiError
+                    ? `Verification API/parse error for text "${currentExpected.verificationText}". Reason: ${verifyResult.reason}`
+                    : `Expected text "${currentExpected.verificationText}" not found on screen after ${VERIFICATION_MAX_RETRIES} retries. Reason: ${verifyResult.reason}`;
+                  log(`[Agent Loop] ${errorPrefix} - text "${currentExpected.verificationText}"${retryCount > 0 ? ` (after ${retryCount} retries)` : ''}`);
+                  log(`[Agent Loop] Verification reason: ${verifyResult.reason}`);
+                  return {
+                    success: false,
+                    error: `${errorPrefix}: "${currentExpected.verificationText}"`,
+                    iterations: iteration,
+                    testResult: createTestResult({
+                      status: 'failure',
+                      failureReason,
+                      failureDetails: failureDetailsText,
+                      completedSteps: iteration,
+                      completedActionIndex,
+                      lastAction: actionDetails,
+                      startedAt,
+                    }),
+                    expectedActions,
+                    isFromFallback,
+                    executedActions,
+                    completedActionCount: executedActions.filter((a) => a.success).length,
+                    lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
+                    failedAtAction: isApiError
+                      ? `Verification API error: "${currentExpected.verificationText}"`
+                      : `Verification: "${currentExpected.verificationText}" not found`,
+                  };
+                }
+              } else {
+                currentExpected.completed = true;
+                log(`[Agent Loop] Expected action completed (Claude verified, screen changed): ${currentExpected.description}`);
+                completedActionIndex++;
+                mediumConfidenceActionCount = 0;
+                lowMediumConfidenceCount = 0;
+              }
             } else if (completionCheck.isCompleted && !screenChanged) {
-              log('[Agent Loop] Claude verified completion but no screen change - not advancing index');
+              // Claude verified but no screen change - check verificationText if available
+              const currentExpected = expectedActions[completedActionIndex];
+              if (currentExpected.verificationText) {
+                log(`[Agent Loop] Claude verified, no screen change - checking verificationText: "${currentExpected.verificationText}"`);
+
+                const { result: verifyResult, retryCount, latestScreenshot } = await verifyTextWithRetry(
+                  currentExpected.verificationText,
+                  () => invoke<CaptureResult>('capture_screen'),
+                  captureResult.imageBase64,
+                  log
+                );
+
+                // Update captureResult if we took new screenshots during retry
+                if (latestScreenshot) {
+                  captureResult = latestScreenshot;
+                }
+
+                if (verifyResult.verified) {
+                  // Verification success overrides screen change requirement
+                  currentExpected.completed = true;
+                  log(`[Agent Loop] Expected action completed (Claude + text verified${retryCount > 0 ? ` after ${retryCount} retries` : ''}, no screen change needed): ${currentExpected.description}`);
+                  log(`[Agent Loop] Verification reason: ${verifyResult.reason}`);
+                  completedActionIndex++;
+                  mediumConfidenceActionCount = 0;
+                  lowMediumConfidenceCount = 0;
+                } else {
+                  // Verification failed - immediate failure
+                  // Distinguish between API/parse errors and actual verification failures
+                  const isApiError = verifyResult.isError === true;
+                  const failureReason = isApiError ? 'api_error' : 'verification_failed';
+                  const errorPrefix = isApiError ? 'Verification API error' : 'Verification failed';
+                  const failureDetailsText = isApiError
+                    ? `Verification API/parse error for text "${currentExpected.verificationText}". Reason: ${verifyResult.reason}`
+                    : `Expected text "${currentExpected.verificationText}" not found on screen after ${VERIFICATION_MAX_RETRIES} retries. Reason: ${verifyResult.reason}`;
+                  log(`[Agent Loop] ${errorPrefix} - text "${currentExpected.verificationText}"${retryCount > 0 ? ` (after ${retryCount} retries)` : ''}`);
+                  log(`[Agent Loop] Verification reason: ${verifyResult.reason}`);
+                  return {
+                    success: false,
+                    error: `${errorPrefix}: "${currentExpected.verificationText}"`,
+                    iterations: iteration,
+                    testResult: createTestResult({
+                      status: 'failure',
+                      failureReason,
+                      failureDetails: failureDetailsText,
+                      completedSteps: iteration,
+                      completedActionIndex,
+                      lastAction: actionDetails,
+                      startedAt,
+                    }),
+                    expectedActions,
+                    isFromFallback,
+                    executedActions,
+                    completedActionCount: executedActions.filter((a) => a.success).length,
+                    lastSuccessfulAction: executedActions.filter((a) => a.success).pop()?.description,
+                    failedAtAction: isApiError
+                      ? `Verification API error: "${currentExpected.verificationText}"`
+                      : `Verification: "${currentExpected.verificationText}" not found`,
+                  };
+                }
+              } else {
+                log('[Agent Loop] Claude verified completion but no screen change - not advancing index');
+              }
             }
           }
 
@@ -1031,7 +1355,7 @@ function formatActionDetails(
 }
 
 /**
- * Call Claude API with abort support
+ * Call Claude API with abort support via Supabase Edge Function
  * Uses model configuration to support different Claude models (Opus 4.5, Sonnet, etc.)
  */
 async function callClaudeAPI(
@@ -1043,16 +1367,12 @@ async function callClaudeAPI(
   let abortHandler: (() => void) | null = null;
 
   try {
-    const client = await getClaudeClient();
-
-    const apiPromise = client.beta.messages.create({
-      model: modelConfig.model,
-      max_tokens: 4096,
-      system: RESULT_SCHEMA_INSTRUCTION,
-      tools: [buildComputerTool(captureResult, modelConfig)] as unknown as Parameters<typeof client.beta.messages.create>[0]['tools'],
+    const apiPromise = callClaudeAPIViaProxy(
       messages,
-      betas: [modelConfig.betaHeader],
-    });
+      captureResult,
+      modelConfig,
+      RESULT_SCHEMA_INSTRUCTION
+    );
 
     const abortPromise = new Promise<never>((_, reject) => {
       if (abortSignal.aborted) {

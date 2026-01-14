@@ -6,6 +6,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use image::{DynamicImage, GenericImageView, GrayImage, Rgba, RgbaImage};
 use imageproc::template_matching::{find_extremes, match_template, MatchTemplateMethod};
+use rayon::prelude::*;
 use serde::Serialize;
 
 use crate::error::XenotesterError;
@@ -123,6 +124,7 @@ pub fn find_template_in_screenshot(
 ///
 /// Optimization: Decodes screenshot once and reuses it for all template matches.
 /// This avoids redundant base64 decoding and grayscale conversion.
+/// Uses parallel processing (rayon) to match templates concurrently.
 ///
 /// # Arguments
 /// * `screenshot_base64` - Base64 encoded screenshot (already resized)
@@ -162,14 +164,33 @@ pub fn match_templates_batch(
 
     let screenshot_gray = screenshot.to_luma8();
 
-    // Process each template with the pre-decoded screenshot
+    // Apply additional downscaling for faster matching
+    // This reduces CPU load significantly (0.5 scale = 4x fewer pixels to process)
+    let (optimized_screenshot, optimization_scale) = if MATCH_OPTIMIZATION_SCALE < 1.0 {
+        let (w, h) = screenshot_gray.dimensions();
+        let new_w = ((w as f64) * MATCH_OPTIMIZATION_SCALE).round() as u32;
+        let new_h = ((h as f64) * MATCH_OPTIMIZATION_SCALE).round() as u32;
+        let resized = image::imageops::resize(
+            &screenshot_gray,
+            new_w.max(1),
+            new_h.max(1),
+            image::imageops::FilterType::Triangle, // Fast bilinear filter
+        );
+        (resized, MATCH_OPTIMIZATION_SCALE)
+    } else {
+        (screenshot_gray, 1.0)
+    };
+
+    // Process templates in parallel using rayon
+    // Each template matching is independent, so we can parallelize safely
     templates
-        .into_iter()
+        .into_par_iter()
         .map(|(template_base64, file_name)| {
-            let result = find_template_with_decoded_screenshot(
-                &screenshot_gray,
+            let result = find_template_with_decoded_screenshot_optimized(
+                &optimized_screenshot,
                 template_base64,
                 scale_factor,
+                optimization_scale,
                 confidence_threshold,
             );
             (file_name.to_string(), result)
@@ -184,7 +205,31 @@ fn find_template_with_decoded_screenshot(
     scale_factor: f64,
     confidence_threshold: f32,
 ) -> MatchResult {
-    find_template_internal(screenshot_gray, template_base64, scale_factor, confidence_threshold)
+    find_template_with_decoded_screenshot_optimized(
+        screenshot_gray,
+        template_base64,
+        scale_factor,
+        1.0, // No additional optimization
+        confidence_threshold,
+    )
+}
+
+/// Internal function with optimization scale support
+/// The optimization_scale is applied on top of the scale_factor for faster matching
+fn find_template_with_decoded_screenshot_optimized(
+    screenshot_gray: &GrayImage,
+    template_base64: &str,
+    scale_factor: f64,
+    optimization_scale: f64,
+    confidence_threshold: f32,
+) -> MatchResult {
+    find_template_internal_optimized(
+        screenshot_gray,
+        template_base64,
+        scale_factor,
+        optimization_scale,
+        confidence_threshold,
+    )
 }
 
 /// Minimum opacity ratio threshold for template matching
@@ -192,14 +237,24 @@ fn find_template_with_decoded_screenshot(
 /// and will return found=false to avoid false positives
 const MIN_OPACITY_RATIO: f32 = 0.1; // At least 10% of pixels must be opaque
 
-/// Internal implementation that returns MatchResult directly with error codes
-/// Uses pre-decoded grayscale screenshot for efficiency
-fn find_template_internal(
+/// Additional scale factor for template matching optimization
+/// Both screenshot and template are downscaled by this factor before matching
+/// to reduce CPU load. Coordinates are scaled back after matching.
+/// 0.5 = 4x faster (half width * half height = 1/4 pixels)
+const MATCH_OPTIMIZATION_SCALE: f64 = 0.5;
+
+/// Optimized internal implementation with additional scaling for faster matching
+/// Uses pre-decoded and pre-scaled grayscale screenshot for efficiency
+fn find_template_internal_optimized(
     screenshot_gray: &GrayImage,
     template_base64: &str,
     scale_factor: f64,
+    optimization_scale: f64,
     confidence_threshold: f32,
 ) -> MatchResult {
+    // Combined scale factor: API scale * optimization scale
+    let combined_scale = scale_factor * optimization_scale;
+
     // Decode template image with detailed error code
     let template_original = match decode_template_image(template_base64) {
         Ok(img) => img,
@@ -217,36 +272,36 @@ fn find_template_internal(
         }
     };
 
-    // Scale alignment: resize hint image by same factor as screenshot
-    // Screenshot is already resized (scale_factor applied)
-    // Hint image needs same scale_factor to match sizes
-    let template = if scale_factor < 1.0 {
-        let (orig_w, orig_h) = template_original.dimensions();
-        let new_w = ((orig_w as f64) * scale_factor).round() as u32;
-        let new_h = ((orig_h as f64) * scale_factor).round() as u32;
+    // Get original template dimensions for return value (at API scale, not optimization scale)
+    let (orig_w, orig_h) = template_original.dimensions();
+    let api_template_width = ((orig_w as f64) * scale_factor).round() as u32;
+    let api_template_height = ((orig_h as f64) * scale_factor).round() as u32;
+
+    // Scale alignment: resize hint image by combined factor (API + optimization)
+    let template = if combined_scale < 1.0 {
+        let new_w = ((orig_w as f64) * combined_scale).round() as u32;
+        let new_h = ((orig_h as f64) * combined_scale).round() as u32;
 
         // Ensure minimum size of 1x1 pixel
         let new_w = new_w.max(1);
         let new_h = new_h.max(1);
 
-        template_original.resize_exact(new_w, new_h, image::imageops::FilterType::Lanczos3)
+        // Use fast Triangle filter instead of Lanczos3 for speed
+        template_original.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle)
     } else {
         template_original
     };
 
     // Check opacity ratio before processing
-    // Templates that are mostly transparent will become nearly uniform after
-    // alpha compositing, leading to unreliable NCC results
     let opacity_ratio = calculate_opacity_ratio(&template);
     if opacity_ratio < MIN_OPACITY_RATIO {
-        let (w, h) = template.dimensions();
         return MatchResult {
             found: false,
             center_x: None,
             center_y: None,
             confidence: None,
-            template_width: w,
-            template_height: h,
+            template_width: api_template_width,
+            template_height: api_template_height,
             error: Some(format!(
                 "Template has insufficient opacity ({:.1}% < {:.1}% minimum). Mostly transparent images cannot be reliably matched.",
                 opacity_ratio * 100.0,
@@ -257,8 +312,6 @@ fn find_template_internal(
     }
 
     // Convert to grayscale with alpha compositing for transparent PNGs
-    // Transparent pixels are composited onto white background to avoid
-    // treating them as black (which causes misdetection for icons)
     let template_gray = convert_to_grayscale_with_alpha(&template);
 
     let template_width = template_gray.width();
@@ -271,16 +324,14 @@ fn find_template_internal(
             center_x: None,
             center_y: None,
             confidence: Some(0.0),
-            template_width,
-            template_height,
+            template_width: api_template_width,
+            template_height: api_template_height,
             error: Some("Template is larger than screenshot after scaling".to_string()),
             error_code: Some(MatchErrorCode::TemplateTooLarge),
         };
     }
 
     // Perform template matching using Normalized Cross-Correlation
-    // NCC gives values from -1.0 to 1.0, where 1.0 is a perfect match
-    // This is more robust than SSE which has unbounded upper values
     let result = match_template(
         screenshot_gray,
         &template_gray,
@@ -303,8 +354,8 @@ fn find_template_internal(
             center_x: None,
             center_y: None,
             confidence: None,
-            template_width,
-            template_height,
+            template_width: api_template_width,
+            template_height: api_template_height,
             error: Some(
                 "Template matching produced non-finite confidence value. Template may have insufficient variance (e.g., single-color image).".to_string()
             ),
@@ -313,20 +364,25 @@ fn find_template_internal(
     }
 
     if confidence >= confidence_threshold {
-        // Calculate center coordinates
+        // Calculate center coordinates in optimized scale
         // match_x, match_y is top-left corner of matched region
         // Add half of template dimensions to get center point
         let (match_x, match_y) = extremes.max_value_location;
-        let center_x = match_x as i32 + (template_width / 2) as i32;
-        let center_y = match_y as i32 + (template_height / 2) as i32;
+        let opt_center_x = match_x as f64 + (template_width as f64 / 2.0);
+        let opt_center_y = match_y as f64 + (template_height as f64 / 2.0);
+
+        // Scale coordinates back to API scale (divide by optimization_scale)
+        // Since screenshot was scaled by optimization_scale, we need to reverse it
+        let center_x = (opt_center_x / optimization_scale).round() as i32;
+        let center_y = (opt_center_y / optimization_scale).round() as i32;
 
         MatchResult {
             found: true,
             center_x: Some(center_x),
             center_y: Some(center_y),
             confidence: Some(confidence),
-            template_width,
-            template_height,
+            template_width: api_template_width,
+            template_height: api_template_height,
             error: None,
             error_code: None,
         }
@@ -336,8 +392,8 @@ fn find_template_internal(
             center_x: None,
             center_y: None,
             confidence: Some(confidence),
-            template_width,
-            template_height,
+            template_width: api_template_width,
+            template_height: api_template_height,
             error: None,
             error_code: None,
         }

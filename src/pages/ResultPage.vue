@@ -66,7 +66,7 @@ function formatActionHistory(actions: ExecutedAction[]): string {
           :class="['result-item', r.success ? 'success' : 'failure']"
         >
           <div class="result-header">
-            <span class="scenario-number">シナリオ{{ idx + 1 }}</span>
+            <span class="scenario-number">テストステップ{{ idx + 1 }}</span>
             <span class="scenario-title">{{ r.title }}</span>
             <span
               :class="[

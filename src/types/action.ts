@@ -83,6 +83,8 @@ export interface AgentLoopConfig {
   maxSameActionRepeats?: number;
   /** Maximum unchanged screenshots before stuck detection */
   maxUnchangedScreenshots?: number;
+  /** Delay in milliseconds after click actions before capturing screenshot */
+  actionDelayMs?: number;
 }
 
 /** Default agent loop configuration */
@@ -93,4 +95,5 @@ export const DEFAULT_AGENT_LOOP_CONFIG: AgentLoopConfig = {
   modelConfig: DEFAULT_CLAUDE_MODEL_CONFIG,
   maxSameActionRepeats: 5,
   maxUnchangedScreenshots: 3,
+  actionDelayMs: 1000,
 };

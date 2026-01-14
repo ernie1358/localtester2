@@ -34,3 +34,11 @@ export async function signOut(): Promise<void> {
   const client = await getSupabaseClient();
   await client.auth.signOut();
 }
+
+/**
+ * Get Supabase configuration (URL and anon key)
+ * Used for Edge Function calls
+ */
+export async function getSupabaseConfig(): Promise<SupabaseConfig> {
+  return invoke<SupabaseConfig>('get_supabase_config');
+}

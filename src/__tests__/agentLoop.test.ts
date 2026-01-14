@@ -19,25 +19,19 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 // Mock claudeClient
 vi.mock('../services/claudeClient', () => ({
-  getClaudeClient: vi.fn().mockResolvedValue({
-    beta: {
-      messages: {
-        create: vi.fn().mockImplementation(async (params: { messages: BetaMessageParam[] }) => {
-          // Capture the messages for inspection
-          capturedMessages = params.messages;
-          // Return a completion response (no tool use, indicates success)
-          return {
-            content: [
-              {
-                type: 'text',
-                text: '{"result": "success", "details": "Test completed successfully"}',
-              },
-            ],
-            stop_reason: 'end_turn',
-          };
-        }),
-      },
-    },
+  callClaudeAPIViaProxy: vi.fn().mockImplementation(async (messages: BetaMessageParam[]) => {
+    // Capture the messages for inspection
+    capturedMessages = messages;
+    // Return a completion response (no tool use, indicates success)
+    return {
+      content: [
+        {
+          type: 'text',
+          text: '{"result": "success", "details": "Test completed successfully"}',
+        },
+      ],
+      stop_reason: 'end_turn',
+    };
   }),
   buildComputerTool: vi.fn().mockReturnValue({
     type: 'computer_20241022',
@@ -1111,13 +1105,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
       });
 
     vi.doMock('../services/claudeClient', () => ({
-      getClaudeClient: vi.fn().mockResolvedValue({
-        beta: {
-          messages: {
-            create: mockCreate,
-          },
-        },
-      }),
+      callClaudeAPIViaProxy: (...args: unknown[]) => mockCreate(...args),
       buildComputerTool: vi.fn().mockReturnValue({
         type: 'computer_20241022',
         name: 'computer',
@@ -1277,9 +1265,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
       });
 
     vi.doMock('../services/claudeClient', () => ({
-      getClaudeClient: vi.fn().mockResolvedValue({
-        beta: { messages: { create: mockCreate } },
-      }),
+      callClaudeAPIViaProxy: (...args: unknown[]) => mockCreate(...args),
       buildComputerTool: vi.fn().mockReturnValue({
         type: 'computer_20241022',
         name: 'computer',
@@ -1424,9 +1410,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
       });
 
     vi.doMock('../services/claudeClient', () => ({
-      getClaudeClient: vi.fn().mockResolvedValue({
-        beta: { messages: { create: mockCreate } },
-      }),
+      callClaudeAPIViaProxy: (...args: unknown[]) => mockCreate(...args),
       buildComputerTool: vi.fn().mockReturnValue({
         type: 'computer_20241022',
         name: 'computer',
@@ -1817,9 +1801,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
       });
 
     vi.doMock('../services/claudeClient', () => ({
-      getClaudeClient: vi.fn().mockResolvedValue({
-        beta: { messages: { create: mockCreate } },
-      }),
+      callClaudeAPIViaProxy: (...args: unknown[]) => mockCreate(...args),
       buildComputerTool: vi.fn().mockReturnValue({
         type: 'computer_20241022',
         name: 'computer',
@@ -1985,9 +1967,7 @@ describe('runAgentLoop - Hint Image Re-matching on Screen Transition', () => {
       });
 
     vi.doMock('../services/claudeClient', () => ({
-      getClaudeClient: vi.fn().mockResolvedValue({
-        beta: { messages: { create: mockCreate } },
-      }),
+      callClaudeAPIViaProxy: (...args: unknown[]) => mockCreate(...args),
       buildComputerTool: vi.fn().mockReturnValue({
         type: 'computer_20241022',
         name: 'computer',

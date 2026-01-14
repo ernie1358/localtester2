@@ -2,7 +2,7 @@
  * Scenario Parser - Split user input into multiple scenarios using Claude
  */
 
-import { getClaudeClient } from './claudeClient';
+import { callClaudeMessagesViaProxy } from './claudeClient';
 import type { Scenario, ScenarioSplitResult } from '../types';
 import { DEFAULT_CLAUDE_MODEL_CONFIG } from '../types';
 
@@ -37,14 +37,12 @@ const SCENARIO_SPLIT_PROMPT = `
  */
 export async function parseScenarios(userInput: string): Promise<Scenario[]> {
   try {
-    const client = await getClaudeClient();
-
-    const response = await client.messages.create({
-      model: DEFAULT_CLAUDE_MODEL_CONFIG.model,
-      max_tokens: 1024,
-      system: SCENARIO_SPLIT_PROMPT,
-      messages: [{ role: 'user', content: userInput }],
-    });
+    const response = await callClaudeMessagesViaProxy(
+      DEFAULT_CLAUDE_MODEL_CONFIG.model,
+      1024,
+      SCENARIO_SPLIT_PROMPT,
+      [{ role: 'user', content: userInput }]
+    );
 
     const content = response.content[0];
     if (content.type !== 'text') {

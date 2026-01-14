@@ -33,6 +33,13 @@ export function hashAction(action: ComputerAction): string {
 }
 
 /**
+ * Actions that should be excluded from loop detection
+ * These are observation/waiting actions that Claude uses normally
+ * and should not trigger infinite loop detection
+ */
+const LOOP_DETECTION_EXCLUDED_ACTIONS = ['screenshot', 'wait'];
+
+/**
  * Detect if we're in an infinite loop
  * @param actionHistory Recent action history
  * @param currentAction Current action to check
@@ -44,6 +51,12 @@ export function detectLoop(
   currentAction: ComputerAction,
   config: AgentLoopConfig
 ): boolean {
+  // Exclude non-progressive actions from loop detection
+  // These are observation actions that Claude uses to check the screen
+  if (LOOP_DETECTION_EXCLUDED_ACTIONS.includes(currentAction.action)) {
+    return false;
+  }
+
   const currentHash = hashAction(currentAction);
   const recentHashes = actionHistory
     .slice(-config.loopDetectionWindow)

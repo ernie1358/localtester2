@@ -35,7 +35,6 @@ async function handleGoogleLogin() {
   <div class="login-container">
     <div class="login-card">
       <img src="/logo.png" alt="Xenotester" class="login-logo" />
-      <h1>Xenotester</h1>
       <p class="tagline">AI-Powered E2E Test Automation Tool</p>
 
       <div v-if="errorMessage" class="error-box">
@@ -94,11 +93,6 @@ async function handleGoogleLogin() {
 .login-logo {
   width: 200px;
   margin-bottom: 16px;
-}
-
-h1 {
-  margin: 0 0 8px 0;
-  color: #24c8db;
 }
 
 .tagline {

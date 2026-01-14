@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { ref, watch, computed } from 'vue';
 import { VueDraggable } from 'vue-draggable-plus';
 import type { StoredScenario } from '../types';
 
@@ -16,11 +16,22 @@ const emit = defineEmits<{
   delete: [scenario: StoredScenario];
 }>();
 
-// Local scenarios for drag-and-drop
-const localScenarios = computed({
-  get: () => props.scenarios,
-  set: (val) => emit('update:order', val),
-});
+// Local copy for drag-and-drop (deep copy to avoid prop mutation)
+const localScenarios = ref<StoredScenario[]>([]);
+
+// Sync local copy when props change using watch with getter for reliable prop tracking
+watch(
+  () => props.scenarios,
+  (newScenarios) => {
+    localScenarios.value = newScenarios.map((s) => ({ ...s }));
+  },
+  { immediate: true, deep: true }
+);
+
+// Emit order update after drag ends
+function handleDragEnd() {
+  emit('update:order', localScenarios.value.map((s) => ({ ...s })));
+}
 
 const allSelected = computed({
   get: () =>
@@ -49,7 +60,7 @@ function toggleSelection(id: string) {
  * Get selected scenario IDs in current display order
  */
 function getSelectedIdsInOrder(): string[] {
-  return props.scenarios.filter((s) => props.selectedIds.has(s.id)).map((s) => s.id);
+  return localScenarios.value.filter((s) => props.selectedIds.has(s.id)).map((s) => s.id);
 }
 
 // Expose method to parent
@@ -66,8 +77,8 @@ defineExpose({ getSelectedIdsInOrder });
     </div>
 
     <div v-if="scenarios.length === 0" class="empty-message">
-      シナリオがありません。<br />
-      「新規シナリオ登録」ボタンから登録してください。
+      テストステップがありません。<br />
+      「新規テストステップ登録」ボタンから登録してください。
     </div>
 
     <VueDraggable
@@ -75,52 +86,52 @@ defineExpose({ getSelectedIdsInOrder });
       v-model="localScenarios"
       handle=".drag-handle"
       :disabled="isRunning"
-      item-key="id"
       class="scenario-rows"
+      @end="handleDragEnd"
     >
-      <template #item="{ element, index }">
-        <div
-          class="scenario-row"
-          :class="{ selected: selectedIds.has(element.id) }"
-        >
-          <input
-            type="checkbox"
-            :checked="selectedIds.has(element.id)"
-            @change="toggleSelection(element.id)"
-            :disabled="isRunning"
-            class="scenario-checkbox"
-          />
-          <span class="order-number">{{ index + 1 }}</span>
-          <div class="scenario-info">
-            <span class="scenario-title">{{ element.title }}</span>
-            <span class="scenario-description">{{
-              element.description.substring(0, 50)
-            }}{{ element.description.length > 50 ? '...' : '' }}</span>
-          </div>
-          <div class="actions">
-            <button
-              @click="$emit('edit', element)"
-              :disabled="isRunning"
-              class="edit-button"
-            >
-              編集
-            </button>
-            <button
-              @click="$emit('delete', element)"
-              :disabled="isRunning"
-              class="delete-button"
-            >
-              削除
-            </button>
-          </div>
-          <span
-            class="drag-handle"
-            :class="{ disabled: isRunning }"
-            title="ドラッグして並び替え"
-            >&#9776;</span
-          >
+      <div
+        v-for="(element, index) in localScenarios"
+        :key="element.id"
+        class="scenario-row"
+        :class="{ selected: selectedIds.has(element.id) }"
+      >
+        <input
+          type="checkbox"
+          :checked="selectedIds.has(element.id)"
+          @change="toggleSelection(element.id)"
+          :disabled="isRunning"
+          class="scenario-checkbox"
+        />
+        <span class="order-number">{{ index + 1 }}</span>
+        <div class="scenario-info">
+          <span class="scenario-title">{{ element.title }}</span>
+          <span class="scenario-description">{{
+            element.description.substring(0, 50)
+          }}{{ element.description.length > 50 ? '...' : '' }}</span>
         </div>
-      </template>
+        <div class="actions">
+          <button
+            @click="$emit('edit', element)"
+            :disabled="isRunning"
+            class="edit-button"
+          >
+            編集
+          </button>
+          <button
+            @click="$emit('delete', element)"
+            :disabled="isRunning"
+            class="delete-button"
+          >
+            削除
+          </button>
+        </div>
+        <span
+          class="drag-handle"
+          :class="{ disabled: isRunning }"
+          title="ドラッグして並び替え"
+          >&#9776;</span
+        >
+      </div>
     </VueDraggable>
   </div>
 </template>

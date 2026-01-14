@@ -11,6 +11,7 @@ const windowConstructorCalls: { label: string; options: Record<string, unknown> 
 const mockClose = vi.fn();
 const mockOnce = vi.fn();
 const mockEmit = vi.fn();
+const mockSetFocus = vi.fn();
 
 // Create a proper class mock that tracks constructor calls
 class MockWebviewWindow {
@@ -19,6 +20,7 @@ class MockWebviewWindow {
   close = mockClose;
   once = mockOnce;
   emit = mockEmit;
+  setFocus = mockSetFocus;
 
   constructor(label: string, options: Record<string, unknown>) {
     this.label = label;
@@ -64,6 +66,7 @@ describe('ResultWindowService', () => {
     // Setup default mock behaviors
     mockClose.mockResolvedValue(undefined);
     mockEmit.mockResolvedValue(undefined);
+    mockSetFocus.mockResolvedValue(undefined);
 
     // Mock window events - trigger 'created' immediately
     mockOnce.mockImplementation((event, callback) => {

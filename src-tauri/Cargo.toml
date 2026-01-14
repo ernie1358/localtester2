@@ -14,7 +14,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Tauri core
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-opener = "2"
 
 # Serialization
@@ -31,6 +31,7 @@ enigo = { version = "0.6", features = ["wayland"] }
 image = "0.25"
 imageproc = "0.25"  # Template matching for hint image coordinate detection
 base64 = "0.22"
+rayon = "1.10"  # Parallel template matching for hint images
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

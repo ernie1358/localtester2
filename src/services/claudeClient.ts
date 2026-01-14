@@ -1,34 +1,12 @@
 /**
  * Claude API Client for Computer Use
+ * Uses Supabase Edge Function as proxy (API key is server-side)
  */
 
-import Anthropic from '@anthropic-ai/sdk';
-import { invoke } from '@tauri-apps/api/core';
+import type { BetaMessage, BetaMessageParam } from '@anthropic-ai/sdk/resources/beta/messages';
+import { getSession, getSupabaseConfig } from './supabaseClient';
 import type { CaptureResult, ClaudeModelConfig } from '../types';
 import { DEFAULT_CLAUDE_MODEL_CONFIG } from '../types';
-
-/** Singleton Claude client instance */
-let anthropicClient: Anthropic | null = null;
-
-/**
- * Get or create the Claude client
- * API key is fetched from Rust backend (loaded from .env)
- */
-export async function getClaudeClient(): Promise<Anthropic> {
-  if (anthropicClient) {
-    return anthropicClient;
-  }
-
-  // Get API key from Rust backend
-  const apiKey = await invoke<string>('get_api_key', { keyName: 'anthropic' });
-
-  anthropicClient = new Anthropic({
-    apiKey,
-    dangerouslyAllowBrowser: true, // Required for Tauri WebView
-  });
-
-  return anthropicClient;
-}
 
 /**
  * Computer tool type for Claude API
@@ -66,10 +44,138 @@ export function buildComputerTool(
 }
 
 /**
- * Check if the API key is configured
+ * Check if the user is authenticated (required for API calls)
  */
 export async function isApiKeyConfigured(): Promise<boolean> {
-  return invoke<boolean>('is_api_key_configured', { keyName: 'anthropic' });
+  try {
+    const session = await getSession();
+    return session !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Call Claude API via Supabase Edge Function
+ * The API key is stored server-side in the Edge Function
+ */
+export async function callClaudeAPIViaProxy(
+  messages: BetaMessageParam[],
+  captureResult: CaptureResult,
+  modelConfig: ClaudeModelConfig = DEFAULT_CLAUDE_MODEL_CONFIG,
+  systemPrompt?: string
+): Promise<BetaMessage> {
+  // Get Supabase session for authentication
+  const session = await getSession();
+  if (!session) {
+    throw new Error('Not authenticated. Please sign in first.');
+  }
+
+  // Get Supabase config for Edge Function URL
+  const config = await getSupabaseConfig();
+  const edgeFunctionUrl = `${config.url}/functions/v1/claude-proxy`;
+
+  // Build request body (same format as Anthropic API)
+  // Note: betas is sent via header (anthropic-beta), not in body
+  const requestBody = {
+    model: modelConfig.model,
+    max_tokens: 4096,
+    system: systemPrompt,
+    tools: [buildComputerTool(captureResult, modelConfig)],
+    messages,
+  };
+
+  // Call Edge Function
+  // Note: apikey header is required for direct fetch to Supabase Functions
+  const response = await fetch(edgeFunctionUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${session.access_token}`,
+      'apikey': config.anon_key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-beta': modelConfig.betaHeader,
+    },
+    body: JSON.stringify(requestBody),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    let errorMessage: string;
+    try {
+      const errorJson = JSON.parse(errorBody);
+      errorMessage = errorJson.error?.message || errorJson.error || errorBody;
+    } catch {
+      errorMessage = errorBody;
+    }
+    throw new Error(`API call failed (${response.status}): ${errorMessage}`);
+  }
+
+  const result = await response.json();
+  return result as BetaMessage;
+}
+
+/**
+ * Message content type for Claude API
+ */
+export type MessageContent =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+
+/**
+ * Call Claude Messages API via Supabase Edge Function (for text-only tasks)
+ * Used for action extraction, verification, etc.
+ */
+export async function callClaudeMessagesViaProxy(
+  model: string,
+  maxTokens: number,
+  systemPrompt: string,
+  messages: Array<{ role: 'user' | 'assistant'; content: string | MessageContent[] }>
+): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  // Get Supabase session for authentication
+  const session = await getSession();
+  if (!session) {
+    throw new Error('Not authenticated. Please sign in first.');
+  }
+
+  // Get Supabase config for Edge Function URL
+  const config = await getSupabaseConfig();
+  const edgeFunctionUrl = `${config.url}/functions/v1/claude-proxy`;
+
+  // Build request body
+  const requestBody = {
+    model,
+    max_tokens: maxTokens,
+    system: systemPrompt,
+    messages,
+  };
+
+  // Call Edge Function
+  // Note: apikey header is required for direct fetch to Supabase Functions
+  const response = await fetch(edgeFunctionUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${session.access_token}`,
+      'apikey': config.anon_key,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify(requestBody),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    let errorMessage: string;
+    try {
+      const errorJson = JSON.parse(errorBody);
+      errorMessage = errorJson.error?.message || errorJson.error || errorBody;
+    } catch {
+      errorMessage = errorBody;
+    }
+    throw new Error(`API call failed (${response.status}): ${errorMessage}`);
+  }
+
+  return response.json();
 }
 
 /**
