@@ -6,6 +6,7 @@ import ScenarioList from './components/ScenarioList.vue';
 import ScenarioForm from './components/ScenarioForm.vue';
 import DeleteConfirmDialog from './components/DeleteConfirmDialog.vue';
 import LoginPage from './components/LoginPage.vue';
+import StopButton from './components/StopButton.vue';
 import { checkAuth, getSupabaseClient } from './services/authService';
 import {
   getAllScenarios,
@@ -464,14 +465,11 @@ function addLog(message: string) {
         >
           チェックしたテストステップを実行
         </button>
-        <button
+        <StopButton
           v-else
-          @click="stopExecution"
-          :disabled="isStopping"
-          :class="['danger-button', { 'stopping': isStopping }]"
-        >
-          {{ isStopping ? '停止中...' : '停止 (Shift+Esc)' }}
-        </button>
+          :is-stopping="isStopping"
+          @stop="stopExecution"
+        />
       </div>
     </section>
 
