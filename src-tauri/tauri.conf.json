@@ -37,7 +37,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFCQkVCNjYwMUY1MDlDRDkKUldUWm5GQWZZTGErcXp0M011eTlJWmNXaEdoZUF6cjdOd3lPOU5scUdUckZpcVBQZ04zalBmRTIK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU4Q0ZBNDVGMDlDMzMyRDgKUldUWU1zTUpYNlRQNk9GZjRYSGdDclZzMWxzREdYejVCeEoyQmVZSFU0c2RGcjJwbGRoZmhzNFYK",
       "endpoints": [
         "https://s3-63qmmvpfw23dqmuxqu9tcl.storage.railway.app/updates/latest.json"
       ]
