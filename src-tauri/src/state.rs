@@ -1,30 +1,20 @@
 //! Application state management
 
-use global_hotkey::GlobalHotKeyManager;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Global application state shared across commands
 #[derive(Clone)]
 pub struct AppState {
     /// Flag to request stop of all operations
     pub stop_requested: Arc<AtomicBool>,
-    /// Global hotkey manager - must be kept alive to maintain hotkey registration
-    pub hotkey_manager: Arc<Mutex<Option<GlobalHotKeyManager>>>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
             stop_requested: Arc::new(AtomicBool::new(false)),
-            hotkey_manager: Arc::new(Mutex::new(None)),
         }
-    }
-
-    /// Set the hotkey manager (must be called during app initialization)
-    pub fn set_hotkey_manager(&self, manager: GlobalHotKeyManager) {
-        let mut guard = self.hotkey_manager.lock().unwrap();
-        *guard = Some(manager);
     }
 
     /// Request stop of all operations

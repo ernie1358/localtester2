@@ -4,9 +4,26 @@ use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
+use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::state::AppState;
+
+/// Wrapper to hold GlobalHotKeyManager and make it thread-safe for static storage
+/// This is necessary because GlobalHotKeyManager doesn't implement Send on Windows
+#[allow(dead_code)] // Field is intentionally never read - we just keep the manager alive
+struct HotkeyManagerHolder(GlobalHotKeyManager);
+
+// Safety: The hotkey manager is only initialized once from the main thread
+// and never accessed from other threads after initialization. It's kept alive
+// for the lifetime of the application solely to maintain hotkey registration.
+// The inner manager is never mutated or read after being set.
+unsafe impl Send for HotkeyManagerHolder {}
+unsafe impl Sync for HotkeyManagerHolder {}
+
+/// Global storage for hotkey manager to keep it alive for the app lifetime
+/// This is kept separate from AppState because GlobalHotKeyManager doesn't implement Send on Windows
+static HOTKEY_MANAGER: OnceLock<HotkeyManagerHolder> = OnceLock::new();
 
 /// Register emergency stop hotkey (Shift + Escape)
 pub fn register_emergency_stop(app_handle: AppHandle) {
@@ -25,9 +42,9 @@ pub fn register_emergency_stop(app_handle: AppHandle) {
         return;
     }
 
-    // Store manager in app state to prevent it from being dropped
-    let state = app_handle.state::<AppState>();
-    state.set_hotkey_manager(manager);
+    // Store manager in global static to prevent it from being dropped
+    // Note: GlobalHotKeyManager doesn't implement Send on Windows, so we can't put it in AppState
+    let _ = HOTKEY_MANAGER.set(HotkeyManagerHolder(manager));
 
     // Start hotkey event listener thread
     let app_handle_clone = app_handle.clone();
