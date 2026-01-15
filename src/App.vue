@@ -66,6 +66,20 @@ const canExecute = computed(
 
 // Lifecycle
 onMounted(async () => {
+  // Set up emergency stop listener for UI state update
+  // This is registered outside the auth try-catch to ensure it's always available
+  // even if authentication fails, so emergency stop can still update UI state
+  try {
+    emergencyStopUnlisten = await listen('emergency-stop', () => {
+      if (isRunning.value && !isStopping.value) {
+        isStopping.value = true;
+        addLog('緊急停止が発動しました...');
+      }
+    });
+  } catch (error) {
+    console.error('Failed to set up emergency stop listener:', error);
+  }
+
   try {
     // Check authentication state
     isAuthenticated.value = await checkAuth();
@@ -86,14 +100,6 @@ onMounted(async () => {
       }
     });
     authSubscription = data.subscription;
-
-    // Set up emergency stop listener for UI state update
-    emergencyStopUnlisten = await listen('emergency-stop', () => {
-      if (isRunning.value && !isStopping.value) {
-        isStopping.value = true;
-        addLog('緊急停止が発動しました...');
-      }
-    });
   } catch (error) {
     console.error('Auth check error:', error);
     // On auth check failure, keep as unauthenticated
