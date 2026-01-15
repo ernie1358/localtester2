@@ -292,6 +292,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
+            artifacts/**/*.dmg
             artifacts/**/*.app.tar.gz
             artifacts/**/*.nsis.zip
             artifacts/**/*.exe
