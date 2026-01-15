@@ -37,13 +37,23 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- --target aarch64-apple-darwin
 
+      - name: Rename artifacts with architecture
+        run: |
+          cd src-tauri/target/aarch64-apple-darwin/release/bundle/macos
+          for f in *.app.tar.gz; do
+            mv "$f" "${f%.app.tar.gz}_aarch64.app.tar.gz"
+          done
+          for f in *.app.tar.gz.sig; do
+            mv "$f" "${f%.app.tar.gz.sig}_aarch64.app.tar.gz.sig"
+          done
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: macos-aarch64
           path: |
-            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
-            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*_aarch64.app.tar.gz
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*_aarch64.app.tar.gz.sig
 
   build-macos-x86_64:
     runs-on: macos-15
@@ -70,13 +80,23 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- --target x86_64-apple-darwin
 
+      - name: Rename artifacts with architecture
+        run: |
+          cd src-tauri/target/x86_64-apple-darwin/release/bundle/macos
+          for f in *.app.tar.gz; do
+            mv "$f" "${f%.app.tar.gz}_x64.app.tar.gz"
+          done
+          for f in *.app.tar.gz.sig; do
+            mv "$f" "${f%.app.tar.gz.sig}_x64.app.tar.gz.sig"
+          done
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: macos-x86_64
           path: |
-            src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
-            src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
+            src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*_x64.app.tar.gz
+            src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*_x64.app.tar.gz.sig
 
   build-windows:
     runs-on: windows-latest
@@ -111,8 +131,7 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.nsis.zip.sig
 
   publish:
-    needs: [build-macos-aarch64, build-macos-x86_64]
-    # TODO: Re-add build-windows when Windows compatibility is fixed
+    needs: [build-macos-aarch64, build-macos-x86_64, build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -159,8 +178,8 @@ jobs:
           HAS_WIN=false
 
           # Find and upload macOS aarch64
-          MACOS_ARM_APP=$(find artifacts/macos-aarch64 -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1)
-          MACOS_ARM_SIG=$(find artifacts/macos-aarch64 -name "*.app.tar.gz.sig" 2>/dev/null | head -1)
+          MACOS_ARM_APP=$(find artifacts/macos-aarch64 -name "*_aarch64.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1)
+          MACOS_ARM_SIG=$(find artifacts/macos-aarch64 -name "*_aarch64.app.tar.gz.sig" 2>/dev/null | head -1)
           if [ -n "$MACOS_ARM_APP" ] && [ -n "$MACOS_ARM_SIG" ]; then
             MACOS_ARM_FILENAME=$(basename "$MACOS_ARM_APP")
             aws s3 cp "$MACOS_ARM_APP" "s3://${S3_BUCKET}/binaries/v${VERSION}/${MACOS_ARM_FILENAME}" --endpoint-url "$S3_ENDPOINT"
@@ -175,8 +194,8 @@ jobs:
           fi
 
           # Find and upload macOS x86_64
-          MACOS_X64_APP=$(find artifacts/macos-x86_64 -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1)
-          MACOS_X64_SIG=$(find artifacts/macos-x86_64 -name "*.app.tar.gz.sig" 2>/dev/null | head -1)
+          MACOS_X64_APP=$(find artifacts/macos-x86_64 -name "*_x64.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1)
+          MACOS_X64_SIG=$(find artifacts/macos-x86_64 -name "*_x64.app.tar.gz.sig" 2>/dev/null | head -1)
           if [ -n "$MACOS_X64_APP" ] && [ -n "$MACOS_X64_SIG" ]; then
             MACOS_X64_FILENAME=$(basename "$MACOS_X64_APP")
             aws s3 cp "$MACOS_X64_APP" "s3://${S3_BUCKET}/binaries/v${VERSION}/${MACOS_X64_FILENAME}" --endpoint-url "$S3_ENDPOINT"

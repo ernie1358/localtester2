@@ -4,7 +4,7 @@ AIを活用したデスクトップテスト自動化ツール
 
 ## ダウンロード
 
-**[https://ernie1358.github.io/localtester2/](https://ernie1358.github.io/localtester2/)**
+**[https://xenotester.up.railway.app](https://xenotester.up.railway.app)**
 
 ---
 
@@ -63,21 +63,28 @@ git push origin vX.X.X
 
 ### 3. ダウンロードページ
 
-ダウンロードページ (`docs/index.html`) は **自動更新** されます。
+**https://xenotester.up.railway.app**
+
+ダウンロードページは別リポジトリ [xenotester_web](https://github.com/ernie1358/xenotester_web) で管理されています。
 
 - GitHub APIから最新リリース情報を動的に取得
-- 手動更新は不要
+- リリース情報の手動更新は不要
+- Railway にデプロイ（自動）
 
-#### GitHub Pages の初期設定（初回のみ）
+#### ダウンロードページの更新
 
-1. GitHubリポジトリの **Settings** > **Pages** を開く
-2. **Source** を `Deploy from a branch` に設定
-3. **Branch** を `main`、フォルダを `/docs` に設定
-4. **Save** をクリック
+`xenotester_web` リポジトリの `main` ブランチにプッシュすると、Railway が自動でデプロイします。
 
-数分後、以下のURLでアクセス可能：
-```
-https://ernie1358.github.io/localtester2/
+```bash
+# xenotester_web リポジトリをクローン
+git clone https://github.com/ernie1358/xenotester_web.git
+cd xenotester_web
+
+# 変更を加えてプッシュ
+git add -A
+git commit -m "update: ダウンロードページを更新"
+git push origin main
+# → Railway が自動デプロイ
 ```
 
 ---
