@@ -713,16 +713,20 @@ export async function runAgentLoop(
               log(`[Agent Loop] Verifying text: "${currentExpected.verificationText}"`);
               log(`[Agent Loop] Screenshot for verification: ${captureResult.resizedWidth}x${captureResult.resizedHeight} (original: ${captureResult.originalWidth}x${captureResult.originalHeight})`);
 
-              // Save screenshot for debugging
-              try {
-                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-                const debugDir = '/tmp/xenotester-debug';
-                await invoke('ensure_directory', { path: debugDir });
-                const ssPath = `${debugDir}/verification-${timestamp}.png`;
-                await invoke('save_base64_image', { base64_data: captureResult.imageBase64, file_path: ssPath });
-                log(`[Agent Loop] Debug screenshot saved: ${ssPath}`);
-              } catch (e) {
-                log(`[Agent Loop] Failed to save debug screenshot: ${e}`);
+              // Save screenshot for debugging (only in debug mode)
+              // Set XENOTESTER_DEBUG=1 environment variable to enable
+              if (import.meta.env.VITE_XENOTESTER_DEBUG === '1') {
+                try {
+                  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                  // Use OS-agnostic temp path via import.meta.env or fallback
+                  const debugDir = import.meta.env.VITE_XENOTESTER_DEBUG_DIR || '/tmp/xenotester-debug';
+                  await invoke('ensure_directory', { path: debugDir });
+                  const ssPath = `${debugDir}/verification-${timestamp}.png`;
+                  await invoke('save_base64_image', { base64Data: captureResult.imageBase64, filePath: ssPath });
+                  log(`[Agent Loop] Debug screenshot saved: ${ssPath}`);
+                } catch (e) {
+                  log(`[Agent Loop] Failed to save debug screenshot: ${e}`);
+                }
               }
 
               const { result: verifyResult, retryCount, latestScreenshot } = await verifyTextWithRetry(
