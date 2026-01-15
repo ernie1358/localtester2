@@ -8,9 +8,9 @@ AIを活用したデスクトップテスト自動化ツール
 
 ## 現在のバージョン確認
 
-- **最新リリース**: https://github.com/ernie1358/localtester2/releases/latest
-- **全リリース一覧**: https://github.com/ernie1358/localtester2/releases
-- **CI/CD状況**: https://github.com/ernie1358/localtester2/actions
+- **最新リリース**: https://github.com/ernie1358/xenotester/releases/latest
+- **全リリース一覧**: https://github.com/ernie1358/xenotester/releases
+- **CI/CD状況**: https://github.com/ernie1358/xenotester/actions
 
 ---
 
@@ -94,7 +94,7 @@ git push origin vX.X.X
     ↓
 [JavaScript が GitHub API を呼び出し]
     ↓
-https://api.github.com/repos/ernie1358/localtester2/releases/latest
+https://api.github.com/repos/ernie1358/xenotester/releases/latest
     ↓
 [最新リリースの DMG/EXE ファイルを取得]
     ↓
