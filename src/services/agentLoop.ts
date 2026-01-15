@@ -190,9 +190,6 @@ export async function runAgentLoop(
   // Executed action records for tracking (new for batch execution)
   const executedActions: ExecutedActionRecord[] = [];
 
-  // Previous screenshot for screen change detection
-  let previousScreenshotBase64 = '';
-
   // Track hint image match results for re-matching undetected images
   // Key: index (original order), Value: latest match result
   let hintImageMatchResults: Map<number, HintImageMatchResult> = new Map();
@@ -232,7 +229,6 @@ export async function runAgentLoop(
     log('[Agent Loop] Capturing initial screenshot...');
     log(`[Agent Loop] Scenario description: ${options.scenario.description}`);
     captureResult = await invoke<CaptureResult>('capture_screen');
-    previousScreenshotBase64 = captureResult.imageBase64;
 
     // Build initial message content
     type MediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
@@ -611,6 +607,15 @@ export async function runAgentLoop(
 
         // Execute action with detailed logging
         const actionDetails = formatActionDetails(action, captureResult.scaleFactor, captureResult.displayScaleFactor);
+
+        // Log Claude's reasoning for debugging (why this action was chosen)
+        if (lastClaudeResponseText) {
+          const truncatedResponse = lastClaudeResponseText.length > 500
+            ? lastClaudeResponseText.substring(0, 500) + '...(truncated)'
+            : lastClaudeResponseText;
+          log(`[Agent Loop] Claude's reasoning: ${truncatedResponse}`);
+        }
+
         log(`[Agent Loop] Executing: ${actionDetails}`);
         const actionResult = await executeAction(action, captureResult.scaleFactor, captureResult.displayScaleFactor);
 
@@ -664,7 +669,6 @@ export async function runAgentLoop(
 
         // Store previous screenshot for change detection
         const previousScreenshotForComparison = captureResult.imageBase64;
-        previousScreenshotBase64 = captureResult.imageBase64;
 
         // Wait for UI to update after click actions
         // Dialogs and other UI elements may appear asynchronously after clicks
@@ -707,6 +711,19 @@ export async function runAgentLoop(
             // If verificationText is set, verify the text appears on screen
             if (currentExpected.verificationText) {
               log(`[Agent Loop] Verifying text: "${currentExpected.verificationText}"`);
+              log(`[Agent Loop] Screenshot for verification: ${captureResult.resizedWidth}x${captureResult.resizedHeight} (original: ${captureResult.originalWidth}x${captureResult.originalHeight})`);
+
+              // Save screenshot for debugging
+              try {
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                const debugDir = '/tmp/xenotester-debug';
+                await invoke('ensure_directory', { path: debugDir });
+                const ssPath = `${debugDir}/verification-${timestamp}.png`;
+                await invoke('save_base64_image', { base64_data: captureResult.imageBase64, file_path: ssPath });
+                log(`[Agent Loop] Debug screenshot saved: ${ssPath}`);
+              } catch (e) {
+                log(`[Agent Loop] Failed to save debug screenshot: ${e}`);
+              }
 
               const { result: verifyResult, retryCount, latestScreenshot } = await verifyTextWithRetry(
                 currentExpected.verificationText,

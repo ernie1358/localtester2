@@ -69,6 +69,8 @@ pub fn run() {
             screenshot::get_monitors,
             screenshot::capture_screen,
             screenshot::capture_monitor_by_id,
+            screenshot::ensure_directory,
+            screenshot::save_base64_image,
             // Input commands
             input::mouse_move,
             input::left_click,
