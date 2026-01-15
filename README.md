@@ -6,6 +6,12 @@ AIを活用したデスクトップテスト自動化ツール
 
 **[https://xenotester.up.railway.app](https://xenotester.up.railway.app)**
 
+## 現在のバージョン確認
+
+- **最新リリース**: https://github.com/ernie1358/localtester2/releases/latest
+- **全リリース一覧**: https://github.com/ernie1358/localtester2/releases
+- **CI/CD状況**: https://github.com/ernie1358/localtester2/actions
+
 ---
 
 ## 開発者向け情報
@@ -52,40 +58,74 @@ git push origin vX.X.X
 
 ### 2. CI/CDの動作
 
+**ワークフローファイル**: `.github/workflows/release.yml`
+
 タグをプッシュすると、GitHub Actionsが自動的に以下を実行：
 
 1. **ビルド**: macOS (Apple Silicon / Intel) のバイナリを生成
+   - ※ Windows ビルドは現在無効化中（コード互換性の問題）
 2. **署名**: 自動アップデート用の署名を付与
 3. **アップロード**:
    - Railway Storage にバイナリと `latest.json` をアップロード
    - GitHub Releases にバイナリを添付
 4. **リリース作成**: GitHub Releaseを自動生成
 
+#### 生成されるファイル
+
+| ファイル名 | 用途 |
+|-----------|------|
+| `xenotester_aarch64.dmg` | Apple Silicon Mac インストーラー |
+| `xenotester_x64.dmg` | Intel Mac インストーラー |
+| `xenotester_aarch64.app.tar.gz` | Apple Silicon 自動アップデート用 |
+| `xenotester_x64.app.tar.gz` | Intel Mac 自動アップデート用 |
+
 ### 3. ダウンロードページ
 
 **https://xenotester.up.railway.app**
 
-ダウンロードページは別リポジトリ [xenotester_web](https://github.com/ernie1358/xenotester_web) で管理されています。
+ダウンロードページは別リポジトリで管理されています：
+- **リポジトリ**: https://github.com/ernie1358/xenotester_web
+- **ホスティング**: Railway
 
-- GitHub APIから最新リリース情報を動的に取得
-- リリース情報の手動更新は不要
-- Railway にデプロイ（自動）
+#### 仕組み
 
-#### ダウンロードページの更新
+```
+[ユーザーがページを開く]
+    ↓
+[JavaScript が GitHub API を呼び出し]
+    ↓
+https://api.github.com/repos/ernie1358/localtester2/releases/latest
+    ↓
+[最新リリースの DMG/EXE ファイルを取得]
+    ↓
+[ダウンロードボタンを動的に生成]
+```
 
-`xenotester_web` リポジトリの `main` ブランチにプッシュすると、Railway が自動でデプロイします。
+- GitHub API から最新リリース情報を動的に取得
+- `_aarch64.dmg`, `_x64.dmg`, `.exe` ファイルを探してボタン表示
+- リリース後、ダウンロードページは自動更新（手動作業不要）
+
+#### ダウンロードページの更新（デザイン変更など）
 
 ```bash
 # xenotester_web リポジトリをクローン
-git clone https://github.com/ernie1358/xenotester_web.git
+git clone git@github.com:ernie1358/xenotester_web.git
 cd xenotester_web
 
 # 変更を加えてプッシュ
 git add -A
 git commit -m "update: ダウンロードページを更新"
 git push origin main
-# → Railway が自動デプロイ
+# → Railway が自動デプロイ（数分で反映）
 ```
+
+#### 主要ファイル
+
+| ファイル | 用途 |
+|---------|------|
+| `public/index.html` | ダウンロードページ本体 |
+| `public/logo.png` | ロゴ画像 |
+| `server.js` | Express サーバー |
 
 ---
 
@@ -139,12 +179,37 @@ npm run tauri signer generate -- -w ~/.tauri/xenotester.key -p "YOUR_PASSWORD" -
 
 ### GitHub Secrets の設定
 
+リポジトリの Settings → Secrets and variables → Actions で設定：
+
 | Secret名 | 内容 |
 |----------|------|
-| `TAURI_SIGNING_PRIVATE_KEY` | 秘密鍵の内容 |
+| `TAURI_SIGNING_PRIVATE_KEY` | 秘密鍵の内容（`~/.tauri/xenotester.key`） |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 秘密鍵のパスワード |
 | `S3_ACCESS_KEY_ID` | Railway Storage アクセスキー |
 | `S3_SECRET_ACCESS_KEY` | Railway Storage シークレットキー |
+
+---
+
+## Railway 設定
+
+### Storage Bucket（自動アップデート用）
+
+Railway の「Public Bucket URLs」テンプレートを使用：
+
+| 項目 | 値 |
+|------|-----|
+| バケット名 | `public-files-d8pknwli-ywb` |
+| エンドポイント | `https://storage.railway.app` |
+| 公開URL | `https://s3-public-presigner-production-b419.up.railway.app` |
+
+### Web サービス（ダウンロードページ）
+
+| 項目 | 値 |
+|------|-----|
+| サービス名 | web |
+| ドメイン | `xenotester.up.railway.app` |
+| リポジトリ | `ernie1358/xenotester_web` |
+| ブランチ | `main`（自動デプロイ） |
 
 ### 公開鍵の更新
 
@@ -165,10 +230,33 @@ cat ~/.tauri/xenotester.key.pub
 2. **S3アップロードエラー**: Railway Storageの認証情報を確認
 3. **GitHub Release作成エラー**: ワークフローに `permissions: contents: write` があるか確認
 
+### ワークフローがスタックした場合
+
+GitHub Actions のランがキャンセルできない場合：
+
+```bash
+# 1. ワークフローファイルを一時削除
+rm .github/workflows/release.yml
+git add -A && git commit -m "temp: ワークフロー削除" && git push
+
+# 2. 数秒待ってから復元
+git revert HEAD --no-edit && git push
+```
+
+### ダウンロードページにボタンが表示されない場合
+
+1. GitHub Releases に DMG ファイルがあるか確認
+   - ファイル名に `_aarch64.dmg` または `_x64.dmg` が必要
+2. ブラウザのコンソールでエラーを確認
+3. GitHub API のレート制限（60リクエスト/時間）に達していないか確認
+
 ### 自動アップデートが動作しない場合
 
 1. `tauri.conf.json` の `endpoints` URLが正しいか確認
-2. Railway Storageの `latest.json` にアクセスできるか確認
+2. Railway Storageの `latest.json` にアクセスできるか確認：
+   ```
+   https://s3-public-presigner-production-b419.up.railway.app/updates/latest.json
+   ```
 3. アプリのバージョンが `latest.json` より古いか確認
 
 ---
