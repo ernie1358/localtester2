@@ -147,7 +147,8 @@ jobs:
       - name: Upload binaries to Railway Storage
         env:
           S3_ENDPOINT: https://storage.railway.app
-          S3_BUCKET: s3-63qmmvpfw23dqmuxqu9tcl
+          S3_BUCKET: public-files-d8pknwli-ywb
+          PUBLIC_URL: https://s3-public-presigner-production-b419.up.railway.app
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           MISSING_ARTIFACTS=""
@@ -164,7 +165,7 @@ jobs:
             MACOS_ARM_FILENAME=$(basename "$MACOS_ARM_APP")
             aws s3 cp "$MACOS_ARM_APP" "s3://${S3_BUCKET}/binaries/v${VERSION}/${MACOS_ARM_FILENAME}" --endpoint-url "$S3_ENDPOINT"
             aws s3 cp "$MACOS_ARM_SIG" "s3://${S3_BUCKET}/binaries/v${VERSION}/${MACOS_ARM_FILENAME}.sig" --endpoint-url "$S3_ENDPOINT"
-            echo "MACOS_ARM_URL=https://${S3_BUCKET}.storage.railway.app/binaries/v${VERSION}/${MACOS_ARM_FILENAME}" >> $GITHUB_ENV
+            echo "MACOS_ARM_URL=${PUBLIC_URL}/binaries/v${VERSION}/${MACOS_ARM_FILENAME}" >> $GITHUB_ENV
             echo "MACOS_ARM_SIG=$(tr -d '\n\r' < "$MACOS_ARM_SIG")" >> $GITHUB_ENV
             HAS_MACOS_ARM=true
             echo "HAS_MACOS_ARM=true" >> $GITHUB_ENV
@@ -180,7 +181,7 @@ jobs:
             MACOS_X64_FILENAME=$(basename "$MACOS_X64_APP")
             aws s3 cp "$MACOS_X64_APP" "s3://${S3_BUCKET}/binaries/v${VERSION}/${MACOS_X64_FILENAME}" --endpoint-url "$S3_ENDPOINT"
             aws s3 cp "$MACOS_X64_SIG" "s3://${S3_BUCKET}/binaries/v${VERSION}/${MACOS_X64_FILENAME}.sig" --endpoint-url "$S3_ENDPOINT"
-            echo "MACOS_X64_URL=https://${S3_BUCKET}.storage.railway.app/binaries/v${VERSION}/${MACOS_X64_FILENAME}" >> $GITHUB_ENV
+            echo "MACOS_X64_URL=${PUBLIC_URL}/binaries/v${VERSION}/${MACOS_X64_FILENAME}" >> $GITHUB_ENV
             echo "MACOS_X64_SIG=$(tr -d '\n\r' < "$MACOS_X64_SIG")" >> $GITHUB_ENV
             HAS_MACOS_X64=true
             echo "HAS_MACOS_X64=true" >> $GITHUB_ENV
@@ -196,7 +197,7 @@ jobs:
             WIN_FILENAME=$(basename "$WIN_NSIS")
             aws s3 cp "$WIN_NSIS" "s3://${S3_BUCKET}/binaries/v${VERSION}/${WIN_FILENAME}" --endpoint-url "$S3_ENDPOINT"
             aws s3 cp "$WIN_SIG" "s3://${S3_BUCKET}/binaries/v${VERSION}/${WIN_FILENAME}.sig" --endpoint-url "$S3_ENDPOINT"
-            echo "WIN_URL=https://${S3_BUCKET}.storage.railway.app/binaries/v${VERSION}/${WIN_FILENAME}" >> $GITHUB_ENV
+            echo "WIN_URL=${PUBLIC_URL}/binaries/v${VERSION}/${WIN_FILENAME}" >> $GITHUB_ENV
             echo "WIN_SIG=$(tr -d '\n\r' < "$WIN_SIG")" >> $GITHUB_ENV
             HAS_WIN=true
             echo "HAS_WIN=true" >> $GITHUB_ENV
@@ -218,7 +219,7 @@ jobs:
       - name: Generate and upload latest.json
         env:
           S3_ENDPOINT: https://storage.railway.app
-          S3_BUCKET: s3-63qmmvpfw23dqmuxqu9tcl
+          S3_BUCKET: public-files-d8pknwli-ywb
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
