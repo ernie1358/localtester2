@@ -55,7 +55,6 @@ const {
 // Stop button state management (using composable for testability)
 const {
   isStopping,
-  isStopButtonDisabled,
   showStopButton,
   isExecuteDisabledByStopping,
   initiateStop,
