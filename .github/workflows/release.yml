@@ -39,12 +39,17 @@ jobs:
 
       - name: Rename artifacts with architecture
         run: |
-          cd src-tauri/target/aarch64-apple-darwin/release/bundle/macos
-          for f in *.app.tar.gz; do
-            mv "$f" "${f%.app.tar.gz}_aarch64.app.tar.gz"
+          cd src-tauri/target/aarch64-apple-darwin/release/bundle
+          # Rename tar.gz (for auto-update)
+          for f in macos/*.app.tar.gz; do
+            [ -f "$f" ] && mv "$f" "${f%.app.tar.gz}_aarch64.app.tar.gz"
           done
-          for f in *.app.tar.gz.sig; do
-            mv "$f" "${f%.app.tar.gz.sig}_aarch64.app.tar.gz.sig"
+          for f in macos/*.app.tar.gz.sig; do
+            [ -f "$f" ] && mv "$f" "${f%.app.tar.gz.sig}_aarch64.app.tar.gz.sig"
+          done
+          # Rename DMG (for download)
+          for f in dmg/*.dmg; do
+            [ -f "$f" ] && mv "$f" "${f%.dmg}_aarch64.dmg"
           done
 
       - name: Upload artifacts
@@ -54,6 +59,7 @@ jobs:
           path: |
             src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*_aarch64.app.tar.gz
             src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*_aarch64.app.tar.gz.sig
+            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*_aarch64.dmg
 
   build-macos-x86_64:
     runs-on: macos-15
@@ -82,12 +88,17 @@ jobs:
 
       - name: Rename artifacts with architecture
         run: |
-          cd src-tauri/target/x86_64-apple-darwin/release/bundle/macos
-          for f in *.app.tar.gz; do
-            mv "$f" "${f%.app.tar.gz}_x64.app.tar.gz"
+          cd src-tauri/target/x86_64-apple-darwin/release/bundle
+          # Rename tar.gz (for auto-update)
+          for f in macos/*.app.tar.gz; do
+            [ -f "$f" ] && mv "$f" "${f%.app.tar.gz}_x64.app.tar.gz"
           done
-          for f in *.app.tar.gz.sig; do
-            mv "$f" "${f%.app.tar.gz.sig}_x64.app.tar.gz.sig"
+          for f in macos/*.app.tar.gz.sig; do
+            [ -f "$f" ] && mv "$f" "${f%.app.tar.gz.sig}_x64.app.tar.gz.sig"
+          done
+          # Rename DMG (for download)
+          for f in dmg/*.dmg; do
+            [ -f "$f" ] && mv "$f" "${f%.dmg}_x64.dmg"
           done
 
       - name: Upload artifacts
@@ -97,6 +108,7 @@ jobs:
           path: |
             src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*_x64.app.tar.gz
             src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*_x64.app.tar.gz.sig
+            src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*_x64.dmg
 
   build-windows:
     runs-on: windows-latest
