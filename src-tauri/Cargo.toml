@@ -49,6 +49,10 @@ tauri-plugin-sql = { version = "2.3.1", features = ["sqlite"] }
 # OAuth for authentication
 tauri-plugin-oauth = "2"
 
+# Auto-updater
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
 # macOS permissions are handled directly via xcap and enigo capability checks
 
 # macOS HiDPI/Retina display scale factor

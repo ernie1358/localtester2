@@ -7,10 +7,11 @@ use std::io::Cursor;
 
 use crate::error::XenotesterError;
 
-/// Maximum long edge for API (with safety margin from 1568px limit)
-const MAX_LONG_EDGE: u32 = 1560;
-/// Maximum total pixels (~1.15 megapixels)
-const MAX_TOTAL_PIXELS: u32 = 1_150_000;
+/// Maximum long edge for API (increased for better text readability)
+/// Note: Claude Vision API can handle larger images, prioritizing readability over cost
+const MAX_LONG_EDGE: u32 = 1920;
+/// Maximum total pixels (~2 megapixels for better text recognition)
+const MAX_TOTAL_PIXELS: u32 = 2_000_000;
 
 /// Result of image resize operation
 #[derive(Debug, Clone, Serialize)]
@@ -25,8 +26,8 @@ pub struct ResizeResult {
 }
 
 /// Resize screenshot to fit API constraints
-/// - Max long edge: 1560px (safety margin from 1568px API limit)
-/// - Max total pixels: ~1.15 megapixels
+/// - Max long edge: 1920px (increased for better text readability)
+/// - Max total pixels: ~2 megapixels
 pub fn resize_screenshot(image: DynamicImage) -> Result<ResizeResult, XenotesterError> {
     let (original_width, original_height) = image.dimensions();
 

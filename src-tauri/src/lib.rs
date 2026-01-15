@@ -44,6 +44,8 @@ pub fn run() {
         // Initialize plugins
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_oauth::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // SQLite plugin with migrations
         .plugin(
             tauri_plugin_sql::Builder::default()

@@ -85,7 +85,7 @@ pub struct MatchResult {
 /// MatchResult with center coordinates if found, or error information if failed
 ///
 /// # Scale Alignment
-/// The screenshot is already resized (e.g., 2560px → 1560px).
+/// The screenshot is already resized (e.g., 2560px → 1920px).
 /// The hint image is resized by the same scale_factor before matching.
 /// Returned coordinates are in the resized screenshot coordinate system,
 /// which matches the coordinate system used when sending to LLM.

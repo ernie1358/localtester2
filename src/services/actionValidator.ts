@@ -328,23 +328,27 @@ export function validateActionAndCheckProgress(
     : false;
 
   // アクションタイプの根本的な不一致を検出
-  // 1. 期待がクリック系なのに非プログレッシブ（screenshot/wait）を実行した場合は不一致
+  // 1. 期待がクリック系なのに非プログレッシブ（screenshot/wait）またはtype/keyを実行した場合は不一致
   // 2. 期待が非プログレッシブなのにクリック系を実行した場合も不一致（逆方向）
   // 3. 期待がtype/keyなのに非プログレッシブ（screenshot/wait）、scroll、またはクリック系を実行した場合も不一致
+  // 4. 期待がtypeなのにkeyを実行、または期待がkeyなのにtypeを実行した場合も不一致（type↔key取り違え）
   // ただし、期待と実行が同じ場合（例: 両方mouse_move）はミスマッチとしない
   const isExpectedTypeOrKey = expectedActionType === 'type' || expectedActionType === 'key';
+  const isActualTypeOrKey = actionType === 'type' || actionType === 'key';
   const isScrollAction = actionType === 'scroll';
   const isSameActionType = actionType.toLowerCase() === expectedActionType;
   const hasActionTypeMismatch =
     expected.expectedToolAction !== undefined &&
     !isSameActionType &&  // 期待と実行が同じならミスマッチではない
     (
-      // 期待がクリック系 + 実アクションが非プログレッシブ（mouse_moveを除く）
-      (isExpectedClickAction && isNonProgressiveAction && !actionType.includes('mouse_move')) ||
+      // 期待がクリック系 + 実アクションが非プログレッシブ（mouse_moveを除く）またはtype/key
+      (isExpectedClickAction && (isNonProgressiveAction && !actionType.includes('mouse_move') || isActualTypeOrKey)) ||
       // 期待が非プログレッシブ + 実アクションがクリック系（逆方向ミスマッチ）
       (isExpectedNonProgressiveAction && isClickAction) ||
       // 期待がtype/key + 実アクションが非プログレッシブ、scroll、またはクリック系
-      (isExpectedTypeOrKey && (isNonProgressiveAction || isScrollAction || isClickAction))
+      (isExpectedTypeOrKey && (isNonProgressiveAction || isScrollAction || isClickAction)) ||
+      // 期待がtype/keyで実行もtype/keyだが、異なる場合（type↔keyの取り違え）
+      (isExpectedTypeOrKey && isActualTypeOrKey)
     );
 
   // 軽微な画面変化を期待するアクションの判定
@@ -548,7 +552,7 @@ ${completedToolUses.length > 0 ? completedToolUses.join('\n') : '(なし)'}
 
     const response = await callClaudeMessagesViaProxy(
       VISION_MODEL,
-      256,
+      1024,  // Generous limit to avoid truncation
       '',
       [
         {
@@ -646,18 +650,23 @@ export async function verifyTextOnScreen(
 ): Promise<{ verified: boolean; reason?: string; isError?: boolean }> {
   try {
     const prompt = `
-画面を確認して、以下のテキストが表示されているかどうかを判断してください。
+画面全体を注意深く確認して、以下のテキストが表示されているかどうかを判断してください。
 
 確認するテキスト: 「${verificationText}」
 
-注意:
+【重要な確認ポイント】
+- 画面の中央だけでなく、画面の四隅や端にあるウィンドウも必ず確認してください
+- 小さなポップアップウィンドウ、サイドパネル、通知エリアも見落とさないでください
+- 複数のウィンドウが重なっている場合、すべてのウィンドウ内のテキストを確認してください
+
+【判断基準】
 - 完全一致でなくても、意味的に同じテキストが表示されていれば「表示されている」と判断してください
 - 部分一致も許容します（例: 「待機中」と「書き起こし待機中です」は一致と見なす）
 - テキストが画面のどこかに表示されていれば、位置は問いません
 
-以下のJSON形式で回答してください:
+以下のJSON形式のみで回答してください（説明文は不要、JSONのみ出力）:
 \`\`\`json
-{"verified": true/false, "reason": "判断理由（どこに表示されているか、または見つからなかった理由）"}
+{"verified": true/false, "reason": "短い判断理由"}
 \`\`\`
 `;
 
@@ -665,7 +674,7 @@ export async function verifyTextOnScreen(
 
     const response = await callClaudeMessagesViaProxy(
       VISION_MODEL,
-      256,
+      1024,  // Generous limit to avoid truncation
       '',
       [
         {
@@ -742,8 +751,9 @@ export async function verifyTextOnScreen(
     }
 
     // Could not parse JSON from response - this is a parse error, not a verification failure
-    console.warn('[verifyTextOnScreen] Could not parse response:', content.text.substring(0, 200));
-    return { verified: false, reason: 'Could not parse response', isError: true };
+    const truncatedResponse = content.text.substring(0, 300);
+    console.warn('[verifyTextOnScreen] Could not parse response:', truncatedResponse);
+    return { verified: false, reason: `Could not parse response. Claude said: "${truncatedResponse}"`, isError: true };
   } catch (error) {
     console.warn('[verifyTextOnScreen] Verification error:', error);
     return { verified: false, reason: `Verification error: ${error}`, isError: true };

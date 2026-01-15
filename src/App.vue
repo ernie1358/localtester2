@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import ScenarioList from './components/ScenarioList.vue';
 import ScenarioForm from './components/ScenarioForm.vue';
 import DeleteConfirmDialog from './components/DeleteConfirmDialog.vue';
 import LoginPage from './components/LoginPage.vue';
 import StopButton from './components/StopButton.vue';
+import UpdateNotification from './components/UpdateNotification.vue';
 import { checkAuth, getSupabaseClient } from './services/authService';
 import {
   getAllScenarios,
@@ -22,10 +24,14 @@ import { openResultWindow } from './services/resultWindowService';
 import type { StoredScenario, PermissionStatus, StepImage, FormImageData } from './types';
 import { useActionDelay } from './composables/useActionDelay';
 import { useStopButton } from './composables/useStopButton';
+import { useUpdater } from './composables/useUpdater';
 
 // Authentication state
 const isAuthenticated = ref(false);
 const isCheckingAuth = ref(true);
+
+// App version
+const appVersion = ref('');
 
 // State
 const scenarios = ref<StoredScenario[]>([]);
@@ -35,6 +41,16 @@ const logs = ref<string[]>([]);
 
 // Action delay setting (ms after click actions before capturing screenshot)
 const { actionDelayMs, actionDelayOptions } = useActionDelay();
+
+// Auto-updater (checks on startup and every hour)
+const {
+  status: updateStatus,
+  updateInfo,
+  progress: updateProgress,
+  error: updateError,
+  downloadAndInstall,
+  dismissUpdate,
+} = useUpdater();
 
 // Stop button state management (using composable for testability)
 const {
@@ -78,6 +94,9 @@ const canExecute = computed(
 
 // Lifecycle
 onMounted(async () => {
+  // Get app version
+  appVersion.value = await getVersion();
+
   // Set up emergency stop listener for UI state update
   // This is registered outside the auth try-catch to ensure it's always available
   // even if authentication fails, so emergency stop can still update UI state
@@ -381,7 +400,20 @@ function addLog(message: string) {
 
   <!-- Main application -->
   <main v-else class="container">
-    <img src="/logo.png" alt="Xenotester" class="app-logo" />
+    <!-- Update Notification Banner -->
+    <UpdateNotification
+      :status="updateStatus"
+      :update-info="updateInfo"
+      :progress="updateProgress"
+      :error="updateError"
+      @update="downloadAndInstall"
+      @dismiss="dismissUpdate"
+    />
+
+    <div class="logo-container">
+      <img src="/logo.png" alt="Xenotester" class="app-logo" />
+      <span class="app-version">v{{ appVersion }}</span>
+    </div>
 
     <!-- Permission Warning -->
     <div
@@ -537,9 +569,21 @@ body {
   padding: 10px 20px;
 }
 
+.logo-container {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
 .app-logo {
   width: 280px;
   margin-bottom: 0;
+}
+
+.app-version {
+  font-size: 0.75rem;
+  color: #888;
+  margin-bottom: -2px;
 }
 
 .tagline {
