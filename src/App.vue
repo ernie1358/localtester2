@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import ScenarioList from './components/ScenarioList.vue';
 import ScenarioForm from './components/ScenarioForm.vue';
 import DeleteConfirmDialog from './components/DeleteConfirmDialog.vue';
@@ -85,6 +86,9 @@ const scenarioListRef = ref<InstanceType<typeof ScenarioList> | null>(null);
 // Auth subscription cleanup
 let authSubscription: { unsubscribe: () => void } | null = null;
 
+// Window focus listener cleanup
+let focusUnlisten: (() => void) | null = null;
+
 // Computed
 const selectedCount = computed(() => selectedIds.value.size);
 const canExecute = computed(
@@ -133,16 +137,44 @@ onMounted(async () => {
 async function initializeApp() {
   try {
     // Check permissions
-    permissionStatus.value = await invoke<PermissionStatus>('check_permissions');
+    await refreshPermissions();
     // API key is now managed server-side via Edge Function
     // If authenticated, API is available
     apiKeyConfigured.value = true;
     // Load scenarios
     await loadScenarios();
+
+    // Clean up existing focus listener before registering a new one
+    // This prevents duplicate listeners on re-login
+    if (focusUnlisten) {
+      focusUnlisten();
+      focusUnlisten = null;
+    }
+
+    // Set up window focus listener to re-check permissions
+    // This handles the case where user grants permission in System Preferences
+    const mainWindow = getCurrentWindow();
+    focusUnlisten = await mainWindow.onFocusChanged(async ({ payload: focused }) => {
+      if (focused && isAuthenticated.value) {
+        await refreshPermissions();
+      }
+    });
   } catch (error) {
     console.error('Initialization error:', error);
     errorMessage.value =
       error instanceof Error ? error.message : String(error);
+  }
+}
+
+/**
+ * Refresh permission status
+ * Called on app init, window focus, and after requesting permissions
+ */
+async function refreshPermissions() {
+  try {
+    permissionStatus.value = await invoke<PermissionStatus>('check_permissions');
+  } catch (error) {
+    console.error('Permission check error:', error);
   }
 }
 
@@ -155,6 +187,10 @@ onUnmounted(async () => {
   // Cleanup auth subscription
   if (authSubscription) {
     authSubscription.unsubscribe();
+  }
+  // Cleanup window focus listener
+  if (focusUnlisten) {
+    focusUnlisten();
   }
   // Cleanup emergency stop listener
   cleanupEmergencyStopListener();
@@ -177,7 +213,7 @@ async function requestPermissions() {
   try {
     await invoke('request_screen_recording_permission');
     await invoke('request_accessibility_permission');
-    permissionStatus.value = await invoke<PermissionStatus>('check_permissions');
+    await refreshPermissions();
   } catch (error) {
     console.error('Permission request error:', error);
   }
