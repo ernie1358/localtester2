@@ -11,8 +11,8 @@ export const EXECUTION_MODE_REPEAT = 'repeat' as const;
 export const DEFAULT_EXECUTION_MODE = EXECUTION_MODE_ONCE;
 
 export const EXECUTION_MODE_OPTIONS = [
-  { value: EXECUTION_MODE_ONCE, label: '1回のみ実行' },
-  { value: EXECUTION_MODE_REPEAT, label: '停止するまで繰り返す' },
+  { value: EXECUTION_MODE_ONCE, label: '1回のみ' },
+  { value: EXECUTION_MODE_REPEAT, label: '繰り返す' },
 ] as const;
 
 export type ExecutionModeValue = typeof EXECUTION_MODE_ONCE | typeof EXECUTION_MODE_REPEAT;
