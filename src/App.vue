@@ -24,6 +24,8 @@ import { runSelectedScenarios, scenarioRunner } from './services/scenarioRunner'
 import { openResultWindow } from './services/resultWindowService';
 import type { StoredScenario, PermissionStatus, StepImage, FormImageData } from './types';
 import { useActionDelay } from './composables/useActionDelay';
+import { useExecutionMode } from './composables/useExecutionMode';
+import { EXECUTION_MODE_REPEAT } from './constants/executionMode';
 import { useStopButton } from './composables/useStopButton';
 import { useUpdater } from './composables/useUpdater';
 
@@ -42,6 +44,9 @@ const logs = ref<string[]>([]);
 
 // Action delay setting (ms after click actions before capturing screenshot)
 const { actionDelayMs, actionDelayOptions } = useActionDelay();
+
+// Execution mode setting (once or repeat until stopped)
+const { executionMode, executionModeOptions } = useExecutionMode();
 
 // Auto-updater (checks on startup and every hour)
 const {
@@ -371,23 +376,62 @@ async function executeSelected() {
   try {
     // Get selected IDs in display order from component
     const orderedIds = scenarioListRef.value?.getSelectedIdsInOrder() ?? [...selectedIds.value];
+    const shouldRepeat = executionMode.value === EXECUTION_MODE_REPEAT;
+    let loopCount = 0;
 
-    addLog(`${orderedIds.length}個のテストステップを実行開始...`);
+    do {
+      // Check for stop request before starting next loop (effective from 2nd loop onwards)
+      if (loopCount > 0) {
+        // isStopping is true when stop button is pressed or emergency stop is triggered
+        if (isStopping.value) {
+          addLog('停止が要求されたため、次のループをスキップします');
+          break;
+        }
+        // Also check Rust-side stop flag
+        const stopRequested = await invoke<boolean>('is_stop_requested');
+        if (stopRequested) {
+          addLog('停止が要求されたため、次のループをスキップします');
+          break;
+        }
+      }
 
-    const result = await runSelectedScenarios(orderedIds, scenarios.value, {
-      stopOnFailure: false,
-      onLog: addLog,
-      agentConfig: {
-        actionDelayMs: actionDelayMs.value,
-      },
-    });
+      loopCount++;
+      if (shouldRepeat && loopCount > 1) {
+        addLog(`--- ループ ${loopCount} 回目を開始 ---`);
+      }
+      addLog(`${orderedIds.length}個のテストステップを実行開始...`);
 
-    addLog(
-      `実行完了: 成功 ${result.successCount}件 / 失敗 ${result.failureCount}件`
-    );
+      const result = await runSelectedScenarios(orderedIds, scenarios.value, {
+        stopOnFailure: false,
+        onLog: addLog,
+        agentConfig: {
+          actionDelayMs: actionDelayMs.value,
+        },
+      });
 
-    // Open result window
-    await openResultWindow(result);
+      addLog(
+        `実行完了: 成功 ${result.successCount}件 / 失敗 ${result.failureCount}件`
+      );
+
+      // In repeat mode, don't open result window for each loop (too intrusive)
+      // Only open result window for single execution mode
+      if (!shouldRepeat) {
+        await openResultWindow(result);
+      }
+
+      // Check for stop request after loop completion
+      // isStopping is managed by useStopButton and becomes true on stop button press or emergency stop
+      if (isStopping.value) {
+        addLog('停止が要求されたため、ループを終了します');
+        break;
+      }
+
+    } while (shouldRepeat);
+
+    if (shouldRepeat && loopCount > 1) {
+      addLog(`合計 ${loopCount} 回のループ実行が完了しました`);
+    }
+
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     errorMessage.value = msg;
@@ -511,6 +555,22 @@ function addLog(message: string) {
           >
             <option
               v-for="option in actionDelayOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
+        <div class="execution-mode-setting">
+          <label for="execution-mode">実行モード:</label>
+          <select
+            id="execution-mode"
+            v-model="executionMode"
+            :disabled="isRunning"
+          >
+            <option
+              v-for="option in executionModeOptions"
               :key="option.value"
               :value="option.value"
             >
@@ -758,6 +818,49 @@ h2 {
   }
 
   .action-delay-setting select:disabled {
+    background: #444;
+    color: #888;
+  }
+}
+
+.execution-mode-setting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.execution-mode-setting label {
+  font-size: 13px;
+  color: #666;
+  white-space: nowrap;
+}
+
+.execution-mode-setting select {
+  padding: 6px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.execution-mode-setting select:disabled {
+  background: #eee;
+  cursor: not-allowed;
+}
+
+@media (prefers-color-scheme: dark) {
+  .execution-mode-setting label {
+    color: #aaa;
+  }
+
+  .execution-mode-setting select {
+    background: #333;
+    border-color: #555;
+    color: #fff;
+  }
+
+  .execution-mode-setting select:disabled {
     background: #444;
     color: #888;
   }
