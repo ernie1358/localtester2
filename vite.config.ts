@@ -17,12 +17,13 @@ export default defineConfig(async () => ({
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
   },
 
-  // Multi-entry build for main window and result window
+  // Multi-entry build for main window, result window, and settings window
   build: {
     rollupOptions: {
       input: {
         main: resolve(__dirname, "index.html"),
         result: resolve(__dirname, "result.html"),
+        settings: resolve(__dirname, "settings.html"),
       },
     },
   },

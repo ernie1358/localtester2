@@ -16,6 +16,7 @@ import type {
 } from '../types';
 import { mapTestResultStatusToScenarioStatus } from '../types';
 import { validateHintImages } from '../constants/hintImages';
+import { sendFailureNotification } from './webhookService';
 
 /** Options for scenario runner */
 export interface ScenarioRunnerOptions {
@@ -327,15 +328,24 @@ export class ScenarioRunner {
             // Images exceed API limits - stop execution and ask user to reduce images
             const errorMsg = `ヒント画像がAPI制限を超えています。実行を中止しました。\n${validation.error}\nテストステップを編集して画像を減らすか、5MB以下の画像に置き換えてください。`;
             this.log(`[Batch Runner] エラー: ${errorMsg}`);
-            // Record failure for this scenario and stop batch execution
-            results.push({
+
+            // Webhook通知用の結果オブジェクトを作成
+            const validationFailureResult: ScenarioExecutionResult = {
               scenarioId: scenario.id,
               title: scenario.title,
               success: false,
               error: errorMsg,
               completedActions: 0,
               actionHistory: [],
+            };
+
+            // Webhook通知を送信（非同期、エラーは握りつぶす）
+            sendFailureNotification(scenario.id, scenario.title, validationFailureResult).catch((err) => {
+              this.log(`[Batch Runner] Webhook通知の送信に失敗: ${err}`);
             });
+
+            // Record failure for this scenario and stop batch execution
+            results.push(validationFailureResult);
             failureCount++;
             if (this.state.stopOnFailure) {
               this.log('[Batch Runner] stopOnFailure enabled - stopping');
@@ -348,14 +358,22 @@ export class ScenarioRunner {
         // DB read failure is a critical error - stop this scenario to prevent running without expected hints
         const errorMsg = `ヒント画像の読み込みに失敗しました: ${imageError instanceof Error ? imageError.message : String(imageError)}`;
         this.log(`[Batch Runner] エラー: ${errorMsg}`);
-        results.push({
+
+        const imageLoadFailureResult: ScenarioExecutionResult = {
           scenarioId: scenario.id,
           title: scenario.title,
           success: false,
           error: errorMsg,
           completedActions: 0,
           actionHistory: [],
+        };
+
+        // Webhook通知を送信（非同期、エラーは握りつぶす）
+        sendFailureNotification(scenario.id, scenario.title, imageLoadFailureResult).catch((err) => {
+          this.log(`[Batch Runner] Webhook通知の送信に失敗: ${err}`);
         });
+
+        results.push(imageLoadFailureResult);
         failureCount++;
         if (this.state.stopOnFailure) {
           this.log('[Batch Runner] stopOnFailure enabled - stopping');
@@ -406,6 +424,11 @@ export class ScenarioRunner {
         this.log(
           `[Batch Runner] テストステップ失敗: ${scenario.title} - ${agentResult.error}`
         );
+
+        // Webhook通知を送信（非同期、エラーは握りつぶす）
+        sendFailureNotification(scenario.id, scenario.title, executionResult).catch((err) => {
+          this.log(`[Batch Runner] Webhook通知の送信に失敗: ${err}`);
+        });
 
         // Stop if stopOnFailure is set
         if (this.state.stopOnFailure) {

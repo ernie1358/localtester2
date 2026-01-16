@@ -9,7 +9,9 @@ import DeleteConfirmDialog from './components/DeleteConfirmDialog.vue';
 import LoginPage from './components/LoginPage.vue';
 import StopButton from './components/StopButton.vue';
 import UpdateNotification from './components/UpdateNotification.vue';
-import { checkAuth, getSupabaseClient } from './services/authService';
+import UserMenu from './components/UserMenu.vue';
+import { checkAuth, getSupabaseClient, signOut } from './services/authService';
+import { openSettingsWindow } from './services/settingsWindowService';
 import {
   getAllScenarios,
   createScenario,
@@ -471,6 +473,23 @@ function addLog(message: string) {
     }
   }, 0);
 }
+
+// Settings and logout handlers
+async function handleOpenSettings() {
+  await openSettingsWindow();
+}
+
+async function handleLogout() {
+  try {
+    await signOut();
+    isAuthenticated.value = false;
+    scenarios.value = [];
+    selectedIds.value = new Set();
+  } catch (error) {
+    console.error('Logout failed:', error);
+    errorMessage.value = 'ログアウトに失敗しました';
+  }
+}
 </script>
 
 <template>
@@ -498,9 +517,15 @@ function addLog(message: string) {
       @dismiss="dismissUpdate"
     />
 
-    <div class="logo-container">
-      <img src="/logo.png" alt="Xenotester" class="app-logo" />
-      <span class="app-version">v{{ appVersion }}</span>
+    <div class="header-row">
+      <div class="logo-container">
+        <img src="/logo.png" alt="Xenotester" class="app-logo" />
+        <span class="app-version">v{{ appVersion }}</span>
+      </div>
+      <UserMenu
+        @open-settings="handleOpenSettings"
+        @logout="handleLogout"
+      />
     </div>
 
     <!-- Permission Warning -->
@@ -671,6 +696,12 @@ body {
   max-width: 900px;
   margin: 0 auto;
   padding: 10px 20px;
+}
+
+.header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
 }
 
 .logo-container {

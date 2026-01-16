@@ -9,7 +9,7 @@ pub mod services;
 pub mod state;
 pub mod utils;
 
-use commands::{config, control, input, permission, screenshot, template_match};
+use commands::{config, control, input, permission, screenshot, template_match, webhook};
 use state::AppState;
 use tauri_plugin_sql::{Migration, MigrationKind};
 use utils::hotkey::register_emergency_stop;
@@ -27,6 +27,12 @@ fn get_migrations() -> Vec<Migration> {
             version: 2,
             description: "create_step_images_table",
             sql: include_str!("../migrations/002_create_step_images.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 3,
+            description: "create_settings_table",
+            sql: include_str!("../migrations/003_create_settings.sql"),
             kind: MigrationKind::Up,
         },
     ]
@@ -98,6 +104,8 @@ pub fn run() {
             config::get_supabase_config,
             // Template matching commands
             template_match::match_hint_images,
+            // Webhook commands
+            webhook::send_webhook,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

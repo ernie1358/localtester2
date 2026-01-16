@@ -53,6 +53,11 @@ tauri-plugin-oauth = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
+# HTTP client for webhook notifications (CORS bypass)
+reqwest = { version = "0.12", features = ["json"] }
+# URL parsing and validation
+url = "2"
+
 # macOS permissions are handled directly via xcap and enigo capability checks
 
 # macOS HiDPI/Retina display scale factor and permission APIs
