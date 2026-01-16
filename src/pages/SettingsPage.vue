@@ -35,7 +35,13 @@ async function handleSave() {
   // Validate URL if provided
   if (failureWebhookUrl.value.trim()) {
     try {
-      new URL(failureWebhookUrl.value.trim());
+      const url = new URL(failureWebhookUrl.value.trim());
+      // Only allow http and https schemes (matching Rust backend validation)
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        saveError.value = 'URLはhttp://またはhttps://で始まる必要があります';
+        isSaving.value = false;
+        return;
+      }
     } catch {
       saveError.value = '有効なURLを入力してください';
       isSaving.value = false;

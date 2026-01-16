@@ -184,12 +184,46 @@ export class ScenarioRunner {
       this.log(
         `[Scenario Runner] ${statusEmoji} Scenario ${result.testResult.status}: ${scenario.title} - ${result.testResult.claudeAnalysis || result.testResult.failureDetails || ''}`
       );
+
+      // Send webhook notification on failure
+      if (result.testResult.status !== 'success') {
+        sendFailureNotification(scenario.id, scenario.title, {
+          scenarioId: scenario.id,
+          title: scenario.title,
+          success: false,
+          error: result.testResult.failureDetails || 'Unknown error',
+          completedActions: result.completedActionCount ?? 0,
+          failedAtAction: result.failedAtAction,
+          lastSuccessfulAction: result.lastSuccessfulAction,
+          actionHistory: result.executedActions.map((a) => ({
+            index: a.index,
+            action: a.action,
+            description: a.description,
+            success: a.success,
+            timestamp: a.timestamp,
+          })),
+        }).catch((err) => {
+          this.log(`[Scenario Runner] Webhook通知の送信に失敗: ${err}`);
+        });
+      }
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         scenario.status = 'stopped';
       } else {
         scenario.status = 'failed';
         scenario.error = error instanceof Error ? error.message : String(error);
+
+        // Send webhook notification on exception
+        sendFailureNotification(scenario.id, scenario.title, {
+          scenarioId: scenario.id,
+          title: scenario.title,
+          success: false,
+          error: scenario.error,
+          completedActions: 0,
+          actionHistory: [],
+        }).catch((err) => {
+          this.log(`[Scenario Runner] Webhook通知の送信に失敗: ${err}`);
+        });
       }
       scenario.completedAt = new Date();
     }

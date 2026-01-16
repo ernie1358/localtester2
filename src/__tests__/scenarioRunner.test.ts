@@ -33,6 +33,13 @@ vi.mock('../services/scenarioDatabase', () => ({
   getStepImages: mockGetStepImages,
 }));
 
+// Mock webhookService
+const mockSendFailureNotification = vi.fn();
+
+vi.mock('../services/webhookService', () => ({
+  sendFailureNotification: mockSendFailureNotification,
+}));
+
 describe('ScenarioRunner', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -41,6 +48,8 @@ describe('ScenarioRunner', () => {
     mockListen.mockResolvedValue(mockUnlisten);
     // Default: return empty array for hint images
     mockGetStepImages.mockResolvedValue([]);
+    // Default: webhook notification succeeds
+    mockSendFailureNotification.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -854,6 +863,286 @@ describe('ScenarioRunner', () => {
       );
 
       await runner.destroy();
+    });
+  });
+
+  describe('Webhook Notification', () => {
+    describe('runSelected - Webhook on failure', () => {
+      it('should send webhook notification when scenario fails', async () => {
+        mockRunAgentLoop.mockResolvedValue({
+          success: false,
+          error: 'Element not found',
+          executedActions: [
+            { index: 0, action: 'click', description: 'Click button', success: false, timestamp: new Date() },
+          ],
+          iterations: 1,
+          testResult: { status: 'failure' },
+          failedAtAction: 'Click button',
+          completedActionCount: 0,
+        });
+
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === 'is_stop_requested') return false;
+          return undefined;
+        });
+
+        const { ScenarioRunner } = await import('../services/scenarioRunner');
+        const runner = new ScenarioRunner();
+
+        const scenarios: StoredScenario[] = [
+          { id: '1', title: 'Failing Test', description: 'D', order_index: 0, created_at: '', updated_at: '' },
+        ];
+
+        await runner.runSelected(['1'], scenarios);
+
+        expect(mockSendFailureNotification).toHaveBeenCalledWith(
+          '1',
+          'Failing Test',
+          expect.objectContaining({
+            scenarioId: '1',
+            title: 'Failing Test',
+            success: false,
+            error: 'Element not found',
+          })
+        );
+
+        await runner.destroy();
+      });
+
+      it('should not send webhook notification when scenario succeeds', async () => {
+        mockRunAgentLoop.mockResolvedValue({
+          success: true,
+          executedActions: [],
+          iterations: 1,
+          testResult: { status: 'success' },
+        });
+
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === 'is_stop_requested') return false;
+          return undefined;
+        });
+
+        const { ScenarioRunner } = await import('../services/scenarioRunner');
+        const runner = new ScenarioRunner();
+
+        const scenarios: StoredScenario[] = [
+          { id: '1', title: 'Passing Test', description: 'D', order_index: 0, created_at: '', updated_at: '' },
+        ];
+
+        await runner.runSelected(['1'], scenarios);
+
+        expect(mockSendFailureNotification).not.toHaveBeenCalled();
+
+        await runner.destroy();
+      });
+
+      it('should send webhook notification for hint image validation failure', async () => {
+        // Create 25 images to exceed MAX_IMAGE_COUNT of 20
+        const mockHintImages = Array(25)
+          .fill(null)
+          .map((_, i) => ({
+            id: `img${i}`,
+            scenario_id: '1',
+            image_data: 'x'.repeat(1000),
+            file_name: `hint${i}.png`,
+            mime_type: 'image/png',
+            order_index: i,
+            created_at: '',
+          }));
+
+        mockGetStepImages.mockResolvedValue(mockHintImages);
+
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === 'is_stop_requested') return false;
+          return undefined;
+        });
+
+        const { ScenarioRunner } = await import('../services/scenarioRunner');
+        const runner = new ScenarioRunner();
+
+        const scenarios: StoredScenario[] = [
+          { id: '1', title: 'Test with too many images', description: 'D', order_index: 0, created_at: '', updated_at: '' },
+        ];
+
+        await runner.runSelected(['1'], scenarios);
+
+        expect(mockSendFailureNotification).toHaveBeenCalledWith(
+          '1',
+          'Test with too many images',
+          expect.objectContaining({
+            success: false,
+            error: expect.stringContaining('API制限を超えています'),
+          })
+        );
+
+        await runner.destroy();
+      });
+
+      it('should send webhook notification when hint image loading fails', async () => {
+        mockGetStepImages.mockRejectedValue(new Error('Database error'));
+
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === 'is_stop_requested') return false;
+          return undefined;
+        });
+
+        const { ScenarioRunner } = await import('../services/scenarioRunner');
+        const runner = new ScenarioRunner();
+
+        const scenarios: StoredScenario[] = [
+          { id: '1', title: 'Test with DB error', description: 'D', order_index: 0, created_at: '', updated_at: '' },
+        ];
+
+        await runner.runSelected(['1'], scenarios);
+
+        expect(mockSendFailureNotification).toHaveBeenCalledWith(
+          '1',
+          'Test with DB error',
+          expect.objectContaining({
+            success: false,
+            error: expect.stringContaining('ヒント画像の読み込みに失敗'),
+          })
+        );
+
+        await runner.destroy();
+      });
+    });
+
+    describe('run - Webhook on failure', () => {
+      it('should send webhook notification when scenario fails via run()', async () => {
+        mockRunAgentLoop.mockResolvedValue({
+          success: false,
+          error: 'Assertion failed',
+          executedActions: [
+            { index: 0, action: 'screenshot', description: 'Take screenshot', success: true, timestamp: new Date() },
+            { index: 1, action: 'click', description: 'Click submit', success: false, timestamp: new Date() },
+          ],
+          iterations: 2,
+          testResult: { status: 'failure', failureDetails: 'Assertion failed' },
+          failedAtAction: 'Click submit',
+          lastSuccessfulAction: 'Take screenshot',
+          completedActionCount: 1,
+        });
+
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === 'is_stop_requested') return false;
+          return undefined;
+        });
+
+        const { ScenarioRunner } = await import('../services/scenarioRunner');
+        const runner = new ScenarioRunner();
+
+        const scenarios = [
+          { id: 'test-id', title: 'Test Scenario', description: 'Test description', status: 'pending' as const },
+        ];
+
+        await runner.run(scenarios);
+
+        expect(mockSendFailureNotification).toHaveBeenCalledWith(
+          'test-id',
+          'Test Scenario',
+          expect.objectContaining({
+            scenarioId: 'test-id',
+            title: 'Test Scenario',
+            success: false,
+            error: 'Assertion failed',
+            failedAtAction: 'Click submit',
+            lastSuccessfulAction: 'Take screenshot',
+            completedActions: 1,
+          })
+        );
+
+        await runner.destroy();
+      });
+
+      it('should not send webhook notification when scenario succeeds via run()', async () => {
+        mockRunAgentLoop.mockResolvedValue({
+          success: true,
+          executedActions: [],
+          iterations: 1,
+          testResult: { status: 'success' },
+        });
+
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === 'is_stop_requested') return false;
+          return undefined;
+        });
+
+        const { ScenarioRunner } = await import('../services/scenarioRunner');
+        const runner = new ScenarioRunner();
+
+        const scenarios = [
+          { id: 'test-id', title: 'Test Scenario', description: 'Test description', status: 'pending' as const },
+        ];
+
+        await runner.run(scenarios);
+
+        expect(mockSendFailureNotification).not.toHaveBeenCalled();
+
+        await runner.destroy();
+      });
+
+      it('should send webhook notification when exception occurs during run()', async () => {
+        mockGetStepImages.mockRejectedValue(new Error('Unexpected DB error'));
+
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === 'is_stop_requested') return false;
+          return undefined;
+        });
+
+        const { ScenarioRunner } = await import('../services/scenarioRunner');
+        const runner = new ScenarioRunner();
+
+        const scenarios = [
+          { id: 'test-id', title: 'Test Scenario', description: 'Test description', status: 'pending' as const },
+        ];
+
+        await runner.run(scenarios);
+
+        expect(mockSendFailureNotification).toHaveBeenCalledWith(
+          'test-id',
+          'Test Scenario',
+          expect.objectContaining({
+            success: false,
+            error: expect.stringContaining('ヒント画像の読み込みに失敗'),
+          })
+        );
+
+        await runner.destroy();
+      });
+
+      it('should continue execution even if webhook notification fails', async () => {
+        mockRunAgentLoop.mockResolvedValue({
+          success: false,
+          error: 'Test failed',
+          executedActions: [],
+          iterations: 1,
+          testResult: { status: 'failure', failureDetails: 'Test failed' },
+        });
+
+        mockSendFailureNotification.mockRejectedValue(new Error('Webhook error'));
+
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === 'is_stop_requested') return false;
+          return undefined;
+        });
+
+        const { ScenarioRunner } = await import('../services/scenarioRunner');
+        const runner = new ScenarioRunner();
+
+        const scenarios = [
+          { id: 'test-1', title: 'Test 1', description: 'D1', status: 'pending' as const },
+          { id: 'test-2', title: 'Test 2', description: 'D2', status: 'pending' as const },
+        ];
+
+        // Should not throw even if webhook fails
+        const state = await runner.run(scenarios);
+
+        // Both scenarios should have been processed
+        expect(state.scenarios.length).toBe(2);
+
+        await runner.destroy();
+      });
     });
   });
 });
