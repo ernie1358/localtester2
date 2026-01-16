@@ -452,9 +452,18 @@ function stopExecution() {
   // Note: isStopping state is reset in executeSelected's finally block via resetStoppingState
 }
 
+// Maximum number of log entries to keep (prevents memory issues during long repeat mode runs)
+const MAX_LOG_ENTRIES = 500;
+
 function addLog(message: string) {
   const timestamp = new Date().toLocaleTimeString();
   logs.value.push(`[${timestamp}] ${message}`);
+
+  // Trim old logs if exceeding max
+  if (logs.value.length > MAX_LOG_ENTRIES) {
+    logs.value = logs.value.slice(-MAX_LOG_ENTRIES);
+  }
+
   setTimeout(() => {
     const logContainer = document.querySelector('.log-container');
     if (logContainer) {
