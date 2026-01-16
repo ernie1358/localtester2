@@ -36,8 +36,7 @@ pub fn check_permissions() -> PermissionStatus {
 pub fn request_screen_recording_permission() -> bool {
     #[cfg(target_os = "macos")]
     {
-        // On macOS, we can try to capture a small screenshot to trigger the permission dialog
-        // The actual permission prompt is handled by the OS
+        // First try to capture to trigger the permission dialog (first-time only)
         use xcap::Monitor;
         if let Ok(monitors) = Monitor::all() {
             if let Some(monitor) = monitors.into_iter().next() {
@@ -45,6 +44,14 @@ pub fn request_screen_recording_permission() -> bool {
                 let _ = monitor.capture_image();
             }
         }
+
+        // If still not granted, open System Preferences to Screen Recording
+        if !check_screen_recording() {
+            let _ = std::process::Command::new("open")
+                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+                .spawn();
+        }
+
         // Check if permission was granted
         check_screen_recording()
     }
