@@ -8,12 +8,20 @@ pub struct SupabaseConfig {
     pub anon_key: String,
 }
 
-/// Get Supabase configuration from environment variables
+/// Get Supabase configuration
+///
+/// Priority:
+/// 1. Runtime environment variables (for development)
+/// 2. Compile-time environment variables (for release builds)
 #[tauri::command]
 pub fn get_supabase_config() -> Result<SupabaseConfig, String> {
+    // Try runtime env first (for development), then compile-time (for release)
     let url = env::var("SUPABASE_URL")
+        .or_else(|_| option_env!("SUPABASE_URL").map(String::from).ok_or(()))
         .map_err(|_| "SUPABASE_URL is not set")?;
+
     let anon_key = env::var("SUPABASE_ANON_KEY")
+        .or_else(|_| option_env!("SUPABASE_ANON_KEY").map(String::from).ok_or(()))
         .map_err(|_| "SUPABASE_ANON_KEY is not set")?;
 
     Ok(SupabaseConfig { url, anon_key })
