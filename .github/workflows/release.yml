@@ -73,7 +73,12 @@ jobs:
           APPLE_API_KEY: ${{ env.APPLE_API_KEY_PATH }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        run: npm run tauri build -- --target aarch64-apple-darwin
+        run: |
+          echo "Debug: APPLE_API_KEY path = $APPLE_API_KEY"
+          echo "Debug: APPLE_API_KEY_ID = $APPLE_API_KEY_ID"
+          echo "Debug: APPLE_API_ISSUER = $APPLE_API_ISSUER"
+          ls -la "$APPLE_API_KEY" || echo "File not found!"
+          npm run tauri build -- --target aarch64-apple-darwin
 
       - name: Rename artifacts with architecture
         run: |
@@ -160,7 +165,12 @@ jobs:
           APPLE_API_KEY: ${{ env.APPLE_API_KEY_PATH }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        run: npm run tauri build -- --target x86_64-apple-darwin
+        run: |
+          echo "Debug: APPLE_API_KEY path = $APPLE_API_KEY"
+          echo "Debug: APPLE_API_KEY_ID = $APPLE_API_KEY_ID"
+          echo "Debug: APPLE_API_ISSUER = $APPLE_API_ISSUER"
+          ls -la "$APPLE_API_KEY" || echo "File not found!"
+          npm run tauri build -- --target x86_64-apple-darwin
 
       - name: Rename artifacts with architecture
         run: |
