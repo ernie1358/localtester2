@@ -98,10 +98,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_KEY: ${{ env.APPLE_API_KEY_PATH }}
-          APPLE_API_KEY_ID: ${{ env.APPLE_API_KEY_ID_CLEAN }}
-          APPLE_API_ISSUER: ${{ env.APPLE_API_ISSUER_CLEAN }}
-        run: npm run tauri build -- --target aarch64-apple-darwin
+        run: |
+          # Use the cleaned environment variables directly
+          export APPLE_API_KEY="$APPLE_API_KEY_PATH"
+          export APPLE_API_KEY_ID="$APPLE_API_KEY_ID_CLEAN"
+          export APPLE_API_ISSUER="$APPLE_API_ISSUER_CLEAN"
+          echo "Debug: APPLE_API_KEY=$APPLE_API_KEY"
+          echo "Debug: APPLE_API_KEY_ID=$APPLE_API_KEY_ID"
+          echo "Debug: APPLE_API_ISSUER=$APPLE_API_ISSUER"
+          npm run tauri build -- --target aarch64-apple-darwin
 
       - name: Rename artifacts with architecture
         run: |
@@ -206,10 +211,12 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_KEY: ${{ env.APPLE_API_KEY_PATH }}
-          APPLE_API_KEY_ID: ${{ env.APPLE_API_KEY_ID_CLEAN }}
-          APPLE_API_ISSUER: ${{ env.APPLE_API_ISSUER_CLEAN }}
-        run: npm run tauri build -- --target x86_64-apple-darwin
+        run: |
+          # Use the cleaned environment variables directly
+          export APPLE_API_KEY="$APPLE_API_KEY_PATH"
+          export APPLE_API_KEY_ID="$APPLE_API_KEY_ID_CLEAN"
+          export APPLE_API_ISSUER="$APPLE_API_ISSUER_CLEAN"
+          npm run tauri build -- --target x86_64-apple-darwin
 
       - name: Rename artifacts with architecture
         run: |
