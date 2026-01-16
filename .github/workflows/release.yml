@@ -55,15 +55,43 @@ jobs:
 
       - name: Setup Apple API Key for notarization
         env:
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_B64: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID_RAW: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_RAW: ${{ secrets.APPLE_API_ISSUER }}
         run: |
+          # Write API key file (using printf to avoid shell interpretation issues)
           mkdir -p $RUNNER_TEMP/private_keys
-          echo -n "$APPLE_API_KEY" | base64 --decode > $RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
-          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8" >> $GITHUB_ENV
-          # Debug: verify file was created correctly
-          echo "API Key file created, checking format:"
-          head -1 $RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
+          printf '%s' "$APPLE_API_KEY_B64" | base64 --decode > "$RUNNER_TEMP/private_keys/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/private_keys/AuthKey.p8"
+
+          # Set environment variables with newline removal
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/private_keys/AuthKey.p8" >> "$GITHUB_ENV"
+          printf '%s' "$APPLE_API_KEY_ID_RAW" | tr -d '\r\n' > /tmp/key_id.txt
+          echo "APPLE_API_KEY_ID_CLEAN=$(cat /tmp/key_id.txt)" >> "$GITHUB_ENV"
+          printf '%s' "$APPLE_API_ISSUER_RAW" | tr -d '\r\n' > /tmp/issuer.txt
+          echo "APPLE_API_ISSUER_CLEAN=$(cat /tmp/issuer.txt)" >> "$GITHUB_ENV"
+
+          # Debug output
+          echo "API Key file created:"
+          ls -la "$RUNNER_TEMP/private_keys/AuthKey.p8"
+          echo "First line:"
+          head -1 "$RUNNER_TEMP/private_keys/AuthKey.p8"
+          echo "Key ID (hex):"
+          cat /tmp/key_id.txt | xxd | head -2
+          echo "Issuer (hex):"
+          cat /tmp/issuer.txt | xxd | head -2
+
+      - name: Test notarytool authentication
+        run: |
+          echo "Testing notarytool authentication..."
+          echo "Key path: $APPLE_API_KEY_PATH"
+          echo "Key ID: $APPLE_API_KEY_ID_CLEAN"
+          echo "Issuer: $APPLE_API_ISSUER_CLEAN"
+          xcrun notarytool history \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY_ID_CLEAN" \
+            --issuer "$APPLE_API_ISSUER_CLEAN" \
+            2>&1 || echo "notarytool test failed"
 
       - name: Build Tauri app (aarch64)
         env:
@@ -71,14 +99,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_KEY: ${{ env.APPLE_API_KEY_PATH }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        run: |
-          echo "Debug: APPLE_API_KEY path = $APPLE_API_KEY"
-          echo "Debug: APPLE_API_KEY_ID = $APPLE_API_KEY_ID"
-          echo "Debug: APPLE_API_ISSUER = $APPLE_API_ISSUER"
-          ls -la "$APPLE_API_KEY" || echo "File not found!"
-          npm run tauri build -- --target aarch64-apple-darwin
+          APPLE_API_KEY_ID: ${{ env.APPLE_API_KEY_ID_CLEAN }}
+          APPLE_API_ISSUER: ${{ env.APPLE_API_ISSUER_CLEAN }}
+        run: npm run tauri build -- --target aarch64-apple-darwin
 
       - name: Rename artifacts with architecture
         run: |
@@ -147,15 +170,36 @@ jobs:
 
       - name: Setup Apple API Key for notarization
         env:
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_B64: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID_RAW: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_RAW: ${{ secrets.APPLE_API_ISSUER }}
         run: |
+          # Write API key file (using printf to avoid shell interpretation issues)
           mkdir -p $RUNNER_TEMP/private_keys
-          echo -n "$APPLE_API_KEY" | base64 --decode > $RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
-          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8" >> $GITHUB_ENV
-          # Debug: verify file was created correctly
-          echo "API Key file created, checking format:"
-          head -1 $RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
+          printf '%s' "$APPLE_API_KEY_B64" | base64 --decode > "$RUNNER_TEMP/private_keys/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/private_keys/AuthKey.p8"
+
+          # Set environment variables with newline removal
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/private_keys/AuthKey.p8" >> "$GITHUB_ENV"
+          printf '%s' "$APPLE_API_KEY_ID_RAW" | tr -d '\r\n' > /tmp/key_id.txt
+          echo "APPLE_API_KEY_ID_CLEAN=$(cat /tmp/key_id.txt)" >> "$GITHUB_ENV"
+          printf '%s' "$APPLE_API_ISSUER_RAW" | tr -d '\r\n' > /tmp/issuer.txt
+          echo "APPLE_API_ISSUER_CLEAN=$(cat /tmp/issuer.txt)" >> "$GITHUB_ENV"
+
+          # Debug output
+          echo "API Key file created:"
+          ls -la "$RUNNER_TEMP/private_keys/AuthKey.p8"
+          echo "First line:"
+          head -1 "$RUNNER_TEMP/private_keys/AuthKey.p8"
+
+      - name: Test notarytool authentication
+        run: |
+          echo "Testing notarytool authentication..."
+          xcrun notarytool history \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY_ID_CLEAN" \
+            --issuer "$APPLE_API_ISSUER_CLEAN" \
+            2>&1 || echo "notarytool test failed"
 
       - name: Build Tauri app (x86_64)
         env:
@@ -163,14 +207,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_KEY: ${{ env.APPLE_API_KEY_PATH }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        run: |
-          echo "Debug: APPLE_API_KEY path = $APPLE_API_KEY"
-          echo "Debug: APPLE_API_KEY_ID = $APPLE_API_KEY_ID"
-          echo "Debug: APPLE_API_ISSUER = $APPLE_API_ISSUER"
-          ls -la "$APPLE_API_KEY" || echo "File not found!"
-          npm run tauri build -- --target x86_64-apple-darwin
+          APPLE_API_KEY_ID: ${{ env.APPLE_API_KEY_ID_CLEAN }}
+          APPLE_API_ISSUER: ${{ env.APPLE_API_ISSUER_CLEAN }}
+        run: npm run tauri build -- --target x86_64-apple-darwin
 
       - name: Rename artifacts with architecture
         run: |
