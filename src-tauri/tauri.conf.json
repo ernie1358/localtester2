@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "xenotester",
-  "version": "0.2.18",
+  "version": "0.2.19",
   "identifier": "com.satoshizerocolored.xenotester",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -37,7 +37,8 @@
     "macOS": {
       "signingIdentity": "-",
       "hardenedRuntime": true,
-      "entitlements": "entitlements.plist"
+      "entitlements": "entitlements.plist",
+      "minimumSystemVersion": "10.15"
     }
   },
   "plugins": {

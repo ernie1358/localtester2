@@ -2,12 +2,31 @@
 
 use serde::Serialize;
 
+#[cfg(target_os = "macos")]
+use std::ffi::c_void;
+
 /// Permission status for macOS
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionStatus {
     pub screen_recording: bool,
     pub accessibility: bool,
+}
+
+// macOS API bindings for permission checks
+// Note: These APIs return Boolean (unsigned char in C), which we map to u8 for ABI safety
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> u8;
+    fn CGRequestScreenCaptureAccess() -> u8;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXIsProcessTrusted() -> u8;
+    fn AXIsProcessTrustedWithOptions(options: *const c_void) -> u8;
 }
 
 /// Check all required permissions (macOS only)
@@ -36,23 +55,18 @@ pub fn check_permissions() -> PermissionStatus {
 pub fn request_screen_recording_permission() -> bool {
     #[cfg(target_os = "macos")]
     {
-        // First try to capture to trigger the permission dialog (first-time only)
-        use xcap::Monitor;
-        if let Ok(monitors) = Monitor::all() {
-            if let Some(monitor) = monitors.into_iter().next() {
-                // Attempting to capture will trigger the permission prompt if not granted
-                let _ = monitor.capture_image();
-            }
-        }
+        // Use the official macOS API to request screen recording permission
+        // This will show the system permission dialog if not already granted
+        let granted = unsafe { CGRequestScreenCaptureAccess() } != 0;
 
         // If still not granted, open System Preferences to Screen Recording
-        if !check_screen_recording() {
+        if !granted {
             let _ = std::process::Command::new("open")
                 .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
                 .spawn();
         }
 
-        // Check if permission was granted
+        // Return current permission status
         check_screen_recording()
     }
 
@@ -67,12 +81,28 @@ pub fn request_screen_recording_permission() -> bool {
 pub fn request_accessibility_permission() -> bool {
     #[cfg(target_os = "macos")]
     {
-        // Opening System Preferences to Accessibility
-        let _ = std::process::Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-            .spawn();
+        use core_foundation::base::TCFType;
+        use core_foundation::boolean::CFBoolean;
+        use core_foundation::dictionary::CFDictionary;
+        use core_foundation::string::CFString;
 
-        // Check current status
+        // Create options dictionary with kAXTrustedCheckOptionPrompt = true
+        // This will show the system permission dialog if not already granted
+        let key = CFString::new("AXTrustedCheckOptionPrompt");
+        let value = CFBoolean::true_value();
+        let options = CFDictionary::from_CFType_pairs(&[(key, value)]);
+
+        let granted =
+            unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef() as *const _) } != 0;
+
+        // If still not granted, also open System Preferences
+        if !granted {
+            let _ = std::process::Command::new("open")
+                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+                .spawn();
+        }
+
+        // Return current permission status
         check_accessibility()
     }
 
@@ -82,23 +112,19 @@ pub fn request_accessibility_permission() -> bool {
     }
 }
 
-/// Check screen recording permission on macOS
+/// Check screen recording permission on macOS using CGPreflightScreenCaptureAccess
 #[cfg(target_os = "macos")]
 fn check_screen_recording() -> bool {
-    use xcap::Monitor;
-    // Try to get monitors and capture - if it works, we have permission
-    if let Ok(monitors) = Monitor::all() {
-        if let Some(monitor) = monitors.into_iter().next() {
-            return monitor.capture_image().is_ok();
-        }
-    }
-    false
+    // Use the official macOS API to check screen recording permission
+    // This is more reliable than trying to capture and checking for errors
+    // Returns u8 (0 = false, non-zero = true)
+    unsafe { CGPreflightScreenCaptureAccess() != 0 }
 }
 
 /// Check accessibility permission on macOS using AXIsProcessTrusted
 #[cfg(target_os = "macos")]
 fn check_accessibility() -> bool {
-    // Use enigo to check if we can simulate input
-    use enigo::{Enigo, Settings};
-    Enigo::new(&Settings::default()).is_ok()
+    // Use the official macOS API to check accessibility permission
+    // Returns u8 (0 = false, non-zero = true)
+    unsafe { AXIsProcessTrusted() != 0 }
 }

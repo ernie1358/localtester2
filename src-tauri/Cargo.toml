@@ -55,9 +55,10 @@ tauri-plugin-process = "2"
 
 # macOS permissions are handled directly via xcap and enigo capability checks
 
-# macOS HiDPI/Retina display scale factor
+# macOS HiDPI/Retina display scale factor and permission APIs
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24"
+core-foundation = "0.10"
 
 [features]
 default = []
