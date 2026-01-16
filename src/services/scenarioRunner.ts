@@ -185,8 +185,9 @@ export class ScenarioRunner {
         `[Scenario Runner] ${statusEmoji} Scenario ${result.testResult.status}: ${scenario.title} - ${result.testResult.claudeAnalysis || result.testResult.failureDetails || ''}`
       );
 
-      // Send webhook notification on failure
-      if (result.testResult.status !== 'success') {
+      // Send webhook notification on failure (exclude 'stopped' - user intentionally stopped)
+      const shouldNotify = ['failure', 'timeout', 'error'].includes(result.testResult.status);
+      if (shouldNotify) {
         sendFailureNotification(scenario.id, scenario.title, {
           scenarioId: scenario.id,
           title: scenario.title,
@@ -459,10 +460,13 @@ export class ScenarioRunner {
           `[Batch Runner] テストステップ失敗: ${scenario.title} - ${agentResult.error}`
         );
 
-        // Webhook通知を送信（非同期、エラーは握りつぶす）
-        sendFailureNotification(scenario.id, scenario.title, executionResult).catch((err) => {
-          this.log(`[Batch Runner] Webhook通知の送信に失敗: ${err}`);
-        });
+        // Webhook通知を送信（stopped除外: ユーザーによる意図的な停止）
+        const shouldNotify = ['failure', 'timeout', 'error'].includes(agentResult.testResult.status);
+        if (shouldNotify) {
+          sendFailureNotification(scenario.id, scenario.title, executionResult).catch((err) => {
+            this.log(`[Batch Runner] Webhook通知の送信に失敗: ${err}`);
+          });
+        }
 
         // Stop if stopOnFailure is set
         if (this.state.stopOnFailure) {

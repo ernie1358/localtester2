@@ -3,7 +3,7 @@
  */
 
 import Database from '@tauri-apps/plugin-sql';
-import type { AppSettings, SettingsRow } from '../types';
+import type { AppSettings } from '../types';
 
 // 設定のキー名
 const SETTINGS_KEYS = {
@@ -32,7 +32,7 @@ async function getDatabase(): Promise<Database> {
  */
 async function getSetting(key: string): Promise<string | null> {
   const database = await getDatabase();
-  const results = await database.select<SettingsRow[]>(
+  const results = await database.select<{ value: string }[]>(
     'SELECT value FROM settings WHERE key = ?',
     [key]
   );

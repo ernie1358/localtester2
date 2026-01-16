@@ -1143,6 +1143,72 @@ describe('ScenarioRunner', () => {
 
         await runner.destroy();
       });
+
+      it('should NOT send webhook notification when user stops execution (status: stopped) via run()', async () => {
+        mockRunAgentLoop.mockResolvedValue({
+          success: false,
+          error: 'Stopped by user',
+          executedActions: [
+            { index: 0, action: 'screenshot', description: 'Take screenshot', success: true, timestamp: new Date() },
+          ],
+          iterations: 1,
+          testResult: { status: 'stopped', failureReason: 'user_stopped', failureDetails: 'Stopped by user request' },
+          completedActionCount: 1,
+        });
+
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === 'is_stop_requested') return false;
+          return undefined;
+        });
+
+        const { ScenarioRunner } = await import('../services/scenarioRunner');
+        const runner = new ScenarioRunner();
+
+        const scenarios = [
+          { id: 'test-id', title: 'Test Scenario', description: 'Test description', status: 'pending' as const },
+        ];
+
+        await runner.run(scenarios);
+
+        // Webhook should NOT be called for user-initiated stop
+        expect(mockSendFailureNotification).not.toHaveBeenCalled();
+
+        await runner.destroy();
+      });
+    });
+
+    describe('runSelected - Webhook on stopped', () => {
+      it('should NOT send webhook notification when user stops execution (status: stopped) via runSelected()', async () => {
+        mockRunAgentLoop.mockResolvedValue({
+          success: false,
+          error: 'Stopped by user',
+          executedActions: [
+            { index: 0, action: 'screenshot', description: 'Take screenshot', success: true, timestamp: new Date() },
+          ],
+          iterations: 1,
+          testResult: { status: 'stopped', failureReason: 'user_stopped', failureDetails: 'Stopped by user request' },
+          completedActionCount: 1,
+        });
+
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === 'is_stop_requested') return false;
+          return undefined;
+        });
+
+        const { ScenarioRunner } = await import('../services/scenarioRunner');
+        const runner = new ScenarioRunner();
+
+        const scenarios: StoredScenario[] = [
+          { id: '1', title: 'Stopped Test', description: 'D', order_index: 0, created_at: '', updated_at: '' },
+        ];
+
+        await runner.runSelected(['1'], scenarios);
+
+        // Webhook should NOT be called for user-initiated stop
+        expect(mockSendFailureNotification).not.toHaveBeenCalled();
+
+        await runner.destroy();
+      });
     });
   });
 });
