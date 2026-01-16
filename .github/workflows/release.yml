@@ -38,7 +38,7 @@ jobs:
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
 
           # Decode certificate
-          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o $CERTIFICATE_PATH
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode > $CERTIFICATE_PATH
 
           # Create temporary keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
@@ -59,8 +59,11 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
         run: |
           mkdir -p $RUNNER_TEMP/private_keys
-          echo -n "$APPLE_API_KEY" | base64 --decode -o $RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
+          echo -n "$APPLE_API_KEY" | base64 --decode > $RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
           echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8" >> $GITHUB_ENV
+          # Debug: verify file was created correctly
+          echo "API Key file created, checking format:"
+          head -1 $RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
 
       - name: Build Tauri app (aarch64)
         env:
@@ -122,7 +125,7 @@ jobs:
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
 
           # Decode certificate
-          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o $CERTIFICATE_PATH
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode > $CERTIFICATE_PATH
 
           # Create temporary keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
@@ -143,8 +146,11 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
         run: |
           mkdir -p $RUNNER_TEMP/private_keys
-          echo -n "$APPLE_API_KEY" | base64 --decode -o $RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
+          echo -n "$APPLE_API_KEY" | base64 --decode > $RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
           echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8" >> $GITHUB_ENV
+          # Debug: verify file was created correctly
+          echo "API Key file created, checking format:"
+          head -1 $RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
 
       - name: Build Tauri app (x86_64)
         env:
